@@ -34,6 +34,10 @@ function makeId() {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
+function wait(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
 function severityFromScore(score: number): Severity {
   if (score >= 0.95) return "low";
   if (score >= 0.75) return "moderate";
@@ -475,6 +479,11 @@ export default function TriageLabPage() {
             ? "Manual single"
             : `Manual multi (${request.patients.length})`;
       const loadingSteps = buildLoadingThinkingSteps(taskLabel, scenario);
+      const savedResponses = request.mode === "test" && request.savedResponses;
+      const loadingStepMs = savedResponses ? 700 : 1600;
+      const minimumRunMs = savedResponses
+        ? loadingStepMs * (loadingSteps.length - 1) + 250
+        : 0;
 
       setMessages((prev) => [
         ...prev,
@@ -514,9 +523,10 @@ export default function TriageLabPage() {
               : message,
           ),
         );
-      }, 1600);
+      }, loadingStepMs);
 
       try {
+        const startedAt = Date.now();
         const runResponse = await fetch("/api/triage/run", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -535,6 +545,11 @@ export default function TriageLabPage() {
         };
         if (!episodeResponse.ok) {
           throw new Error(episodePayload.error ?? "failed to load live episode");
+        }
+
+        const elapsedMs = Date.now() - startedAt;
+        if (minimumRunMs > elapsedMs) {
+          await wait(minimumRunMs - elapsedMs);
         }
 
         setMessages((prev) =>
