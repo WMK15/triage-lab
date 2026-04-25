@@ -10,9 +10,9 @@ export function EmptyState() {
         No active case
       </h2>
       <p className="mx-auto mt-1.5 max-w-md text-[13.5px] leading-relaxed text-[var(--text-secondary)]">
-        Describe a scenario above and select an environment. The agent will
-        reason step-by-step, produce a structured decision, and offer
-        standardised next actions.
+        Describe the presenting complaint above. The system will review the
+        intake, ask any short follow-up questions it needs, then assign a
+        structured triage recommendation.
       </p>
     </div>
   );

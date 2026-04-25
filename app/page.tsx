@@ -10,31 +10,15 @@ import { InputPanel } from "@/components/triage/input-panel";
 import { UserMessage } from "@/components/triage/user-message";
 import type {
   Action,
-  AgentMessage as AgentMessageData,
+  AssessResponse,
   Decision,
   LiveTaskOption,
   Message,
-  Severity,
   ThinkingStep,
 } from "@/lib/triage/types";
 
-type EpisodePayload = {
-  id: string;
-  result: Record<string, unknown> | null;
-  meta: Record<string, unknown> | null;
-  trajectory: Array<Record<string, unknown>>;
-  rewards: Array<Record<string, unknown>>;
-};
-
 function makeId() {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
-}
-
-function severityFromScore(score: number): Severity {
-  if (score >= 0.95) return "low";
-  if (score >= 0.75) return "moderate";
-  if (score >= 0.4) return "high";
-  return "critical";
 }
 
 function sentence(text: string) {
@@ -42,212 +26,33 @@ function sentence(text: string) {
   return trimmed.endsWith(".") ? trimmed : `${trimmed}.`;
 }
 
-function buildThinking(trajectory: EpisodePayload["trajectory"]): ThinkingStep[] {
-  return trajectory.flatMap((event, index) => {
-    const type = String(event.type ?? event.kind ?? "");
-    if (type === "queued") {
-      return [
-        {
-          id: `queued-${index}`,
-          label: "Queued run",
-          detail: String(event.text ?? "The backend accepted the run and is waiting for the harness to start."),
-        },
-      ];
-    }
-    if (type === "episode_started") {
-      return [
-        {
-          id: `started-${index}`,
-          label: "Episode started",
-          detail: `Running task ${String(event.task_id ?? "case")} with model ${String(event.model ?? "unknown")}.`,
-        },
-      ];
-    }
-    if (type === "prompt_loaded") {
-      return [
-        {
-          id: `prompt-${index}`,
-          label: "Prompt loaded",
-          detail: "The backend opened the environment session and loaded the case prompt.",
-        },
-      ];
-    }
-    if (type === "tools_loaded") {
-      return [
-        {
-          id: `tools-${index}`,
-          label: "Tools ready",
-          detail: `${String(event.count ?? 0)} tools are available for the model to use.`,
-        },
-      ];
-    }
-    if (type === "tool_call") {
-      return [
-        {
-          id: `call-${index}`,
-          label: `Calling ${String(event.tool ?? "tool").replaceAll("_", " ")}`,
-          detail: typeof event.args === "object" ? JSON.stringify(event.args) : "Preparing tool input.",
-        },
-      ];
-    }
-    if (type === "tool_result") {
-      return [
-        {
-          id: `result-${index}`,
-          label: `${String(event.tool ?? "tool").replaceAll("_", " ")} result`,
-          detail: String(event.text ?? "No output returned."),
-        },
-      ];
-    }
-    if (type === "assistant_text") {
-      return [
-        {
-          id: `assistant-${index}`,
-          label: "Model response",
-          detail: String(event.text ?? "The model replied without a tool call."),
-        },
-      ];
-    }
-    if (type === "error") {
-      return [
-        {
-          id: `error-${index}`,
-          label: "Backend error",
-          detail: String(event.error ?? "Unknown backend error."),
-        },
-      ];
-    }
-    return [];
-  });
-}
-
-function buildPendingThinking(
-  episode: EpisodePayload,
-  taskLabel: string | undefined,
-  scenario: string,
-): ThinkingStep[] {
-  const realSteps = buildThinking(episode.trajectory);
-  if (realSteps.length === 0) {
-    const metaStatus = typeof episode.meta?.status === "string" ? episode.meta.status : "starting";
-    return [
-      {
-        id: "starting",
-        label: metaStatus === "running" ? "Starting live run" : "Preparing live run",
-        detail: taskLabel
-          ? `Opening the shift and anchoring on ${taskLabel}.`
-          : "Opening the shift and preparing the first patient actions.",
-      },
-      {
-        id: "note",
-        label: "Using intake note",
-        detail: scenario.trim() || "Waiting for the backend to begin writing trajectory events.",
-      },
-    ];
-  }
-
-  const tail = realSteps.slice(-6);
-  return [
-    ...tail,
-    {
-      id: "await-next-step",
-      label: "Choosing next action",
-      detail: "Latest backend event received. Waiting for the model to pick the next tool call.",
-    },
-  ];
-}
-
-function buildDecision(episode: EpisodePayload): Decision {
-  const result = episode.result ?? {};
-  const status = typeof result.status === "string" ? result.status : "completed";
-  const score =
-    typeof result.score === "number"
-      ? result.score
-      : typeof result.total_reward === "number"
-        ? result.total_reward
-        : 0;
-  const note = typeof result.operator_note === "string" ? result.operator_note : null;
-  const task =
-    typeof result.task_id === "string"
-      ? result.task_id
-      : typeof result.task === "string"
-        ? result.task
-        : episode.id;
-  const summary =
-    typeof result.summary === "string"
-      ? result.summary
-      : status === "complete"
-        ? `Single-case run completed for ${task}.`
-        : `Single-case run stopped with status ${status} for ${task}.`;
-
-  const headline =
-    status === "complete"
-      ? `Case run complete`
-      : status === "max_turns"
-        ? `Run stopped at max turns`
-        : status === "capped"
-          ? `Run stopped by cost cap`
-          : `Run status: ${status}`;
-
+function intakePrompt(assessment: Extract<AssessResponse, { kind: "question" }>): Decision {
   return {
-    headline,
-    rationale: sentence(note ? `${summary} Operator note: ${note}` : summary),
-    severity: severityFromScore(score),
-    caseProgress: Math.round(score * 100),
+    headline: "More information needed",
+    rationale: sentence(`${assessment.summary} ${assessment.question}`),
+    severity: "moderate",
+    caseProgress: 35,
   };
 }
 
-function buildActions(episode: EpisodePayload): Action[] {
-  const result = episode.result ?? {};
-  const task =
-    typeof result.task_id === "string"
-      ? result.task_id
-      : typeof result.task === "string"
-        ? result.task
-        : episode.id;
-  const status = typeof result.status === "string" ? result.status : "complete";
-
+function intakeActions(): Action[] {
   return [
     {
-      id: `${episode.id}-episode`,
-      label: "Review episode log",
-      description: `Inspect ${task} in the episodes archive.`,
-      intent: "default",
-    },
-    {
-      id: `${episode.id}-rerun`,
-      label: status === "complete" ? "Run adjacent case" : "Retry case run",
-      description:
-        status === "complete"
-          ? `Case run completed cleanly; compare against another dataset-matched case.`
-          : `This run ended as ${status}; retry ${task} with a tighter note or fewer ambiguities.`,
+      id: "answer-follow-up",
+      label: "Answer follow-up",
+      description: "Reply with the missing detail so the case can be triaged.",
       intent: "constructive",
-    },
-    {
-      id: `${episode.id}-handoff`,
-      label: `Inspect ${status} result`,
-      description: `Open the detailed episode view to inspect the case trajectory and tool trace.`,
-      intent: status === "capped" ? "escalation" : "default",
     },
   ];
 }
 
-function buildAcknowledgement(episode: EpisodePayload): string | null {
-  const result = episode.result ?? {};
-  const status = typeof result.status === "string" ? result.status : null;
-  return status ? `Live case run finished with status ${status}.` : null;
-}
-
-function messageFromEpisode(messageId: string, episode: EpisodePayload): AgentMessageData {
+function backgroundThinking(taskLabel: string | null): ThinkingStep {
   return {
-    id: messageId,
-    role: "agent",
-    status: "ready",
-    thinking: buildThinking(episode.trajectory),
-    decision: buildDecision(episode),
-    actions: buildActions(episode),
-    selectedActionId: episode.id ? `${episode.id}-episode` : null,
-    acknowledgement: buildAcknowledgement(episode),
-    createdAt: Date.now(),
+    id: "benchmark",
+    label: "Background benchmark",
+    detail: taskLabel
+      ? `Queued hidden evaluation against ${taskLabel}.`
+      : "Queued hidden evaluation against the closest dataset match.",
   };
 }
 
@@ -256,6 +61,7 @@ export default function TriageLabPage() {
   const [isRunning, setIsRunning] = useState(false);
   const [tasks, setTasks] = useState<LiveTaskOption[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [history, setHistory] = useState<string[]>([]);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -303,11 +109,12 @@ export default function TriageLabPage() {
   );
 
   const handleSubmit = useCallback(
-    async (scenario: string, taskId: string) => {
-      const task = tasks.find((item) => item.id === taskId) ?? null;
+    async (scenario: string) => {
       const userId = makeId();
       const agentId = makeId();
       const now = Date.now();
+      const nextHistory = [...history, scenario];
+
       setMessages((prev) => [
         ...prev,
         {
@@ -315,8 +122,6 @@ export default function TriageLabPage() {
           role: "user",
           scenario,
           environment: "clinical",
-          taskId,
-          taskLabel: task?.label,
           createdAt: now,
         },
         {
@@ -326,10 +131,11 @@ export default function TriageLabPage() {
           thinking: [
             {
               id: "starting",
-              label: "Starting live run",
-              detail: task?.label
-                ? `Opening the shift and anchoring on ${task.label}.`
-                : "Opening the shift and preparing the first patient actions.",
+              label: "Reviewing intake",
+              detail:
+                history.length === 0
+                  ? "Reading the initial complaint and checking whether follow-up is needed."
+                  : "Updating the assessment with the latest follow-up answer.",
             },
           ],
           decision: null,
@@ -340,57 +146,73 @@ export default function TriageLabPage() {
         },
       ]);
       setIsRunning(true);
+      setHistory(nextHistory);
 
       try {
-        const runResponse = await fetch("/api/triage/run", {
+        const assessResponse = await fetch("/api/triage/assess", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ taskId, note: scenario }),
+          body: JSON.stringify({ history: nextHistory }),
         });
-        const runPayload = (await runResponse.json()) as { episodeId?: string; error?: string };
-        if (!runResponse.ok || !runPayload.episodeId) {
-          throw new Error(runPayload.error ?? "failed to launch live case");
+        const assessPayload = (await assessResponse.json()) as AssessResponse & { error?: string };
+        if (!assessResponse.ok) {
+          throw new Error(assessPayload.error ?? "failed to assess intake");
         }
 
-        let complete = false;
-        for (let attempt = 0; attempt < 120; attempt += 1) {
-          const episodeResponse = await fetch(`/api/episodes/${runPayload.episodeId}`, {
-            cache: "no-store",
-          });
-          const episodePayload = (await episodeResponse.json()) as EpisodePayload & { error?: string };
-          if (!episodeResponse.ok) {
-            throw new Error(episodePayload.error ?? "failed to load live episode");
-          }
+        const matchedTask = assessPayload.matchedCase
+          ? tasks.find((item) => item.id === assessPayload.matchedCase?.taskId) ?? null
+          : null;
 
-          if (episodePayload.result) {
-            setMessages((prev) =>
-              prev.map((message) =>
-                message.id === agentId && message.role === "agent"
-                  ? messageFromEpisode(agentId, episodePayload)
-                  : message,
-              ),
-            );
-            complete = true;
-            break;
-          }
-
+        if (assessPayload.kind === "question") {
           setMessages((prev) =>
             prev.map((message) =>
               message.id === agentId && message.role === "agent"
                 ? {
                     ...message,
-                    status: "thinking",
-                    thinking: buildPendingThinking(episodePayload, task?.label, scenario),
+                    status: "ready",
+                    thinking: [
+                      ...assessPayload.thinking,
+                      backgroundThinking(matchedTask?.label ?? null),
+                    ],
+                    decision: intakePrompt(assessPayload),
+                    actions: intakeActions(),
+                    selectedActionId: null,
+                    acknowledgement: null,
                   }
                 : message,
             ),
           );
-
-          await new Promise((resolve) => window.setTimeout(resolve, 1500));
+        } else {
+          setMessages((prev) =>
+            prev.map((message) =>
+              message.id === agentId && message.role === "agent"
+                ? {
+                    ...message,
+                    status: "ready",
+                    thinking: [
+                      ...assessPayload.thinking,
+                      backgroundThinking(matchedTask?.label ?? null),
+                    ],
+                    decision: assessPayload.decision,
+                    actions: assessPayload.actions,
+                    selectedActionId: null,
+                    acknowledgement: assessPayload.acknowledgement,
+                  }
+                : message,
+            ),
+          );
         }
 
-        if (!complete) {
-          throw new Error("live run timed out before the episode finished writing its result");
+        if (matchedTask) {
+          void fetch("/api/triage/run", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ taskId: matchedTask.id, note: nextHistory.join("\n") }),
+          }).catch(() => undefined);
+        }
+
+        if (assessPayload.kind === "decision") {
+          setHistory([]);
         }
       } catch (error) {
         const text = error instanceof Error ? error.message : "live run failed";
@@ -408,7 +230,7 @@ export default function TriageLabPage() {
                     },
                   ],
                   decision: {
-                    headline: "Live case failed",
+                    headline: "Assessment failed",
                     rationale: sentence(text),
                     severity: "high",
                     caseProgress: 0,
@@ -424,7 +246,7 @@ export default function TriageLabPage() {
         setIsRunning(false);
       }
     },
-    [tasks],
+    [history, tasks],
   );
 
   const handleSelectAction = useCallback((messageId: string, actionId: string) => {
@@ -435,7 +257,11 @@ export default function TriageLabPage() {
         return {
           ...message,
           selectedActionId: actionId,
-          acknowledgement: "Action selection is local-only in the live baseline UI.",
+          acknowledgement:
+            message.actions.find((action) => action.id === actionId)?.label ===
+            "Answer follow-up"
+              ? "Add the requested follow-up detail in the input panel to continue triage."
+              : "Action selection is local-only in the current triage UI.",
         };
       }),
     );
@@ -454,13 +280,13 @@ export default function TriageLabPage() {
                 Triage Lab
               </p>
               <p className="text-[12px] text-[var(--text-muted)]">
-                Live triage-nurse baseline runner
+                Intake-driven emergency triage console
               </p>
             </div>
           </div>
 
           <span className="hidden text-[12px] text-[var(--text-muted)] sm:block">
-            v0.2 · live mode
+            v0.2 · intake mode
           </span>
         </div>
       </header>
@@ -472,7 +298,12 @@ export default function TriageLabPage() {
           caseCount={userScenarioCount}
         />
 
-        <InputPanel isRunning={isRunning} tasks={tasks} onSubmit={handleSubmit} />
+        <InputPanel
+          isRunning={isRunning}
+          tasks={tasks}
+          onSubmit={handleSubmit}
+          submitLabel={history.length === 0 ? "Assess case" : "Submit follow-up"}
+        />
 
         {loadError ? (
           <div className="rounded-2xl border border-[var(--error-border)] bg-[var(--error-bg)] px-4 py-3 text-[13px] text-[var(--error-text)] shadow-sm">
