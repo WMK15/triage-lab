@@ -1,160 +1,98 @@
 # Triage Lab
 
-Triage Lab is a clinical-style triage console that now connects the frontend app to a real local backend runner.
+[![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=nextdotjs)](https://nextjs.org/)
+[![React](https://img.shields.io/badge/React-19-20232A?logo=react)](https://react.dev/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-4-06B6D4?logo=tailwindcss&logoColor=white)](https://tailwindcss.com/)
+[![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![OpenReward](https://img.shields.io/badge/OpenReward-Environment-111827)](https://openreward.ai/WMK-15/triage-lab)
 
-The app flow is:
+Triage Lab is an open-source interactive triage console for exploring clinical intake, structured prioritisation, and evaluation inside a simulated emergency-department workflow.
 
-1. enter a freeform intake note in `/`
-2. get lightweight dataset-backed case suggestions from `dataset/emergency-triage.csv`
-3. run a live baseline case through the Python `triage-nurse` backend
-4. render the resulting rollout back into the app as thinking, decision, and follow-up actions
-5. inspect archived rollouts in `/episodes`
+It combines a Next.js frontend with a Python OpenReward environment. A user can describe a case in free text, answer short follow-up questions, run test or manual batches, and inspect archived episode rollouts.
 
-The product is still intentionally procedural rather than chat-like, but it is no longer just a mocked shell.
+## Why this project is interesting
 
-## Current status
+- It treats triage as a structured decision problem, not a generic chatbot interaction.
+- It pairs a polished UI with a runnable evaluation environment and archived trajectories.
+- It can be used as both a product prototype and an agent-evaluation sandbox.
+- It is also published on OpenReward: [openreward.ai/WMK-15/triage-lab](https://openreward.ai/WMK-15/triage-lab)
 
-The system is now a hybrid Next.js + Python local stack.
+The OpenReward listing is the public footprint of the environment side of the project: a compact benchmark surface for testing how well agents classify and reason under triage-style constraints.
 
-- the app frontend lives in `app/` and `components/triage/`
-- the live backend runner lives in `triage-nurse/`
-- the root `dataset/` folder provides intake-search substrate
-- episodes are written to `triage-nurse/runs/<episode_id>/`
-- `/episodes` reads those rollout files directly
+## What it does
 
-Still true:
+The app currently supports four workflows:
 
-- there is no auth
-- there is no database
-- there is no streaming model loop yet
-- the Python harness still runs a deterministic baseline rather than a fully adaptive agent
+- `Chat triage`: collect a free-text intake, ask follow-up questions, and produce a structured triage recommendation.
+- `Test batch`: run a predefined evaluation batch against the Python harness.
+- `Manual single`: enter one patient directly and run the backend on that case.
+- `Manual multi`: enter multiple patients and evaluate them as a batch.
 
-## What the app does now
+Results are rendered in three distinct regions:
 
-### `/`
+- `Thinking`: intermediate reasoning and tool activity.
+- `Decision`: structured triage output with severity and progress.
+- `Evaluation`: per-patient scoring and summary metrics when ground truth is available.
 
-The main page is now connected to the live backend.
+Past runs are stored under `triage-nurse/runs/` and can be browsed in `/episodes`.
 
-- the textarea accepts a freeform patient/intake note
-- the app calls `POST /api/triage/intake` to find likely matching cases from the dataset
-- the best-matching case is selected for the run
-- the app calls `POST /api/triage/run`
-- the backend ensures the Python env server is running, executes the harness, and returns an `episodeId`
-- the app then calls `GET /api/episodes/[id]` and renders the result into the existing triage UI
+## Stack
 
-The user note is passed through to the Python side as an operator note and appears in the rollout.
+- Next.js 16
+- React 19
+- TypeScript
+- Tailwind CSS v4
+- shadcn/ui
+- Python 3.11
+- OpenReward
 
-### `/episodes`
+## Repository layout
 
-The episodes page lists archived runs from `triage-nurse/runs/` and shows:
+```text
+app/
+  api/
+    triage/
+      assess/route.ts      follow-up question and triage assessment API
+      intake/route.ts      intake suggestion API
+      preview/route.ts     batch preview API
+      run/route.ts         launch a backend episode
+      tasks/route.ts       list available evaluation tasks
+    episodes/[id]/route.ts episode payload API
+  episodes/                archived runs UI
+  page.tsx                 main triage console
+components/
+  triage/                  feature UI components
+  ui/                      shadcn/ui primitives
+dataset/                   triage reference data and documentation
+lib/
+  triage/
+    runtime.ts             Next.js <-> Python bridge and dataset logic
+    types.ts               shared app types
+triage-nurse/
+  src/triage_nurse/        OpenReward environment and harness
+  tests/                   backend tests
+  runs/                    archived episode outputs
+```
 
-- episode id
-- task id
-- score
-- disposition
-- summary
-- event count
+## How it works
 
-## Architecture
+1. The frontend collects intake text or manual patient data.
+2. The Next.js API layer matches the case against local reference datasets and/or builds a task spec.
+3. The runtime ensures the Python environment server is available.
+4. The harness runs an episode and writes rollout artifacts to `triage-nurse/runs/<episode_id>/`.
+5. The UI reads those artifacts back and renders thinking steps, decisions, and evaluation details.
 
-### Next.js side
+## Local development
 
-Important app routes:
+### Requirements
 
-- `app/page.tsx` — live intake and result rendering
-- `app/episodes/page.tsx` — rollout archive view
-- `app/api/triage/intake/route.ts` — dataset-backed complaint matching
-- `app/api/triage/tasks/route.ts` — available live cases
-- `app/api/triage/run/route.ts` — starts a live run
-- `app/api/episodes/[id]/route.ts` — returns a single episode payload
+- Node.js 20+
+- npm
+- Python 3.11
+- `uv`
 
-Shared server-side runtime:
-
-- `lib/triage/runtime.ts`
-
-This module is the bridge between Next.js and `triage-nurse`. It:
-
-- reads case files
-- parses the root dataset
-- suggests cases for freeform intake text
-- auto-starts the Python env server if needed
-- executes the Python harness
-- reads episode files back for the UI
-
-### Python side
-
-`triage-nurse/` is a separate `uv`-managed Python project.
-
-Important files:
-
-- `src/triage_nurse/triage_env.py` — OpenReward environment with the current minimal live tools
-- `src/triage_nurse/harness.py` — deterministic baseline runner
-- `scripts/run_demo.py` — batch demo runner across available tasks
-- `cases/*.json` — hand-authored live cases used by the backend env
-
-Current live tool path includes:
-
-- `write`
-- `reflect`
-- `read`
-- `examine`
-- `order`
-- `wait`
-- `submit_handoff`
-
-The note from the frontend is injected into the harness as `--note`, written into the chart, reflected into working notes, and persisted in rollout files.
-
-## Dataset usage
-
-The root dataset is:
-
-- `dataset/emergency-triage.csv`
-
-This file is not just complaint substrate. It contains the labels we should use
-for real triage rewards and OpenReward scoring.
-
-Important fields from `dataset/README.md`:
-
-- `KTAS_expert` — ground-truth expert triage level
-- `Disposition` — ground-truth route/outcome
-- `mistriage` — whether the nurse was correct, over-triaged, or under-triaged
-- `Error_group` — category of the triage mistake
-- `Diagnosis in ED` — useful as diagnosis/outcome context, not as a point-of-triage input signal
-
-Current usage today:
-
-- complaint and diagnosis text are used for lightweight intake matching in the app
-- hand-authored live cases in `triage-nurse/cases/*.json` now carry some dataset-aligned metadata such as `ktas_expert`, `mistriage_risk`, and `error_group_hint`
-
-Intended reward/scoring direction:
-
-- reward correct disposition against dataset-grounded disposition labels
-- reward appropriate acuity against `KTAS_expert`
-- penalize under-triage more heavily than over-triage using `mistriage`
-- use `Error_group` to explain or classify why a rollout failed
-
-This file is not used as a model-training pipeline here. The app currently
-searches complaint/diagnosis text from the CSV and returns the closest
-candidate cases so the operator’s freeform input can steer the selected live
-case.
-
-That means the app is now complaint-driven at intake time, but the actual executable cases still come from:
-
-- `triage-nurse/cases/*.json`
-
-## UI model
-
-The UI still renders three semantic regions:
-
-| Region | Purpose | UI treatment |
-| --- | --- | --- |
-| Thinking | Tool-by-tool trace from the rollout | Muted collapsible panel |
-| Decision | Final disposition + summary | Pale green decision card |
-| Actions | Follow-up actions derived from the result | Selectable action grid |
-
-## Run locally
-
-### App
+### Frontend setup
 
 ```bash
 npm install
@@ -163,77 +101,87 @@ npm run dev
 
 Open `http://localhost:3000`.
 
-### Python backend
-
-`triage-nurse` uses `uv`.
+### Backend setup
 
 ```bash
 cd triage-nurse
-/home/waseef/.local/bin/uv venv --python 3.11
-/home/waseef/.local/bin/uv pip install -e ".[dev]"
+uv venv --python 3.11
+uv pip install -e ".[dev]"
+cp .env.example .env
 ```
 
-You do not need to start the env server manually for normal app usage. The app API will auto-start it if needed.
+Add one provider key to `triage-nurse/.env`:
 
-Manual backend commands are still useful:
+- `OPENAI_API_KEY`, or
+- `ANTHROPIC_API_KEY`
+
+The app can auto-start the environment server when needed. If you want to run the backend directly during development:
 
 ```bash
 cd triage-nurse
-/home/waseef/.local/bin/uv run pytest tests
-/home/waseef/.local/bin/uv run ruff check src tests
-/home/waseef/.local/bin/uv run python -m triage_nurse.triage_env
-/home/waseef/.local/bin/uv run python -m triage_nurse.harness --task patient-a-nstemi --note "silent deterioration concern"
-/home/waseef/.local/bin/uv run python scripts/run_demo.py
+uv run python -m triage_nurse.triage_env
 ```
 
-## Repo layout
+### Useful commands
 
-```text
-app/
-  api/
-    triage/
-      intake/route.ts      dataset-backed intake matching
-      run/route.ts         launch live Python run
-      tasks/route.ts       list live case options
-    episodes/[id]/route.ts fetch single episode payload
-  episodes/page.tsx        rollout archive UI
-  globals.css              design tokens and animations
-  layout.tsx               root layout and font setup
-  page.tsx                 live intake page
-components/
-  ui/                      shadcn primitives
-  triage/                  feature UI components
-dataset/
-  emergency-triage.csv     root intake-matching dataset
-  README.md                dataset documentation
-lib/
-  triage/
-    types.ts               UI/domain types
-    mock-agent.ts          old mock profiles, still partly retained
-    runtime.ts             Next.js <-> Python bridge and dataset helpers
-  utils.ts                 shared utilities
-triage-nurse/
-  cases/                   executable live cases
-  runs/                    archived rollout outputs
-  src/triage_nurse/        env + harness code
+Frontend:
+
+```bash
+npm run dev
+npm run build
+npm run lint
 ```
 
-## Known limitations
+Backend:
 
-- the dataset match is lightweight text overlap, not semantic retrieval
-- the selected live case is still chosen from authored JSON cases, not dynamically generated from the CSV row
-- the backend run is still deterministic
-- the app does not yet ask dynamic follow-up questions
-- the frontend note influences the recorded run context, but not a true model-driven reasoning policy yet
-- the current reward is still a simplified case-local check, not a full dataset-grounded OpenReward score over `KTAS_expert`, `Disposition`, `mistriage`, and `Error_group`
+```bash
+cd triage-nurse
+just install
+just serve-env
+just run-harness
+just test
+just lint
+```
 
-## Next sensible steps
+Equivalent `uv` commands are also available in `triage-nurse/README.md`.
 
-1. replace deterministic harness logic with a real model/tool loop
-2. let the app keep a persistent live session instead of one-shot runs
-3. generate temporary executable cases directly from matched dataset rows
-4. add follow-up questioning when intake ambiguity is high
+## Data
+
+The repository includes several local dataset files under `dataset/`.
+
+- `combined-triage-reference.csv`
+- `emergency-triage-cleaned.csv`
+- `symptom-triage-reference.csv`
+
+These files are used for intake matching, task construction, and evaluation support. See `dataset/README.md` for schema notes, quality caveats, and field descriptions.
+
+## Contributing
+
+Triage Lab is open source, and contributions are welcome.
+
+If you want to help, issues and pull requests that improve the product, environment, evaluation flow, or documentation are all useful.
+
+See [`CONTRIBUTING.md`](./CONTRIBUTING.md) for setup, workflow, and PR guidance.
+
+When contributing:
+
+1. Keep changes small and focused.
+2. Prefer minimal abstractions over speculative structure.
+3. Run the relevant frontend or backend checks before opening a PR.
+4. Avoid committing secrets or local `.env` files.
+
+## Current status
+
+This is an active experimental codebase. The interface is polished enough to explore, but the project is still evolving in a few important ways:
+
+- the environment and scoring loop are still experimental
+- dataset matching is heuristic rather than semantic retrieval
+- some parts of the developer and contribution experience are still evolving
 
 ## License
 
-Private project. No license assigned.
+This project is licensed under the MIT License. See [`LICENSE`](./LICENSE).
+
+## Acknowledgements
+
+Built by SerHackers.dev, engineers at [Serac Group](https://serac-group.co.uk).
