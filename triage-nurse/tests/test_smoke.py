@@ -1,18 +1,15 @@
 """Smoke test: every module imports, OpenReward primitives are present, and
-the env class registers cleanly under Server even with NotImplementedError
-tools."""
+TriageBatchEnv registers cleanly under Server."""
 from __future__ import annotations
 
 
 def test_package_imports() -> None:
     from triage_nurse import (  # noqa: F401
-        actor_logic,
         config,
         cost_tracker,
-        harness,  # noqa: F401
-        judge,
+        dataset,
+        harness,
         llm,
-        patient_logic,
         scoring,
         triage_env,
         world_state,
@@ -32,24 +29,36 @@ def test_openreward_primitives_present() -> None:
 
 
 def test_env_registers_under_server() -> None:
-    """The class is registrable even though tools raise NotImplementedError."""
     from openreward.environments import Server
 
-    from triage_nurse.triage_env import TriageEnv
+    from triage_nurse.triage_env import TriageBatchEnv
 
-    # Construction of Server should not raise.
-    Server([TriageEnv])
+    Server([TriageBatchEnv])  # must not raise
 
 
-def test_example_case_loads() -> None:
-    import json
-    from pathlib import Path
+def test_list_tasks_returns_at_least_one() -> None:
+    from triage_nurse.triage_env import TriageBatchEnv
 
-    case_path = (
-        Path(__file__).parent.parent / "cases" / "example_acute_mi.json"
-    )
-    case = json.loads(case_path.read_text())
-    assert case["narrative_role"] == "silent_deterioration"
-    assert case["true_diagnosis"].startswith("Non-ST-elevation")
-    assert len(case["trajectory"]) >= 3
-    assert "ECG (12-lead)" in case["confirmatory_tests"]
+    tasks = TriageBatchEnv.list_tasks("test")
+    assert len(tasks) >= 1
+    t = tasks[0]
+    assert "id" in t
+    assert "row_indices" in t
+    assert len(t["row_indices"]) == 5
+    assert len(t["ground_truth_ktas"]) == 5
+    for k in t["ground_truth_ktas"]:
+        assert k in (1, 2, 3, 4, 5)
+
+
+def test_construct_env_from_task() -> None:
+    from triage_nurse.triage_env import TriageBatchEnv
+
+    tasks = TriageBatchEnv.list_tasks("test")
+    env = TriageBatchEnv(task_spec=tasks[0])
+    assert len(env.world.patients) == 5
+    assert all(v is None for v in env.world.assigned.values())
+    prompt = env.get_prompt()
+    text = prompt[0].text
+    assert "assign_immediate" in text
+    assert "assign_not_urgent" in text
+    assert "patient_id=" in text  # canonical id formatting
