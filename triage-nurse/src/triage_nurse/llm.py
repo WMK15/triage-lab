@@ -45,7 +45,7 @@ def openai_chat(
     Responses-API shape or Chat Completions shape — translated as needed."""
     from openai import OpenAI
 
-    client = OpenAI()
+    client = OpenAI(api_key=settings.OPENAI_API_KEY)
     model = model or settings.AGENT_MODEL
     kwargs: dict[str, Any] = {"model": model, "messages": messages}
     if tools:
@@ -74,7 +74,7 @@ def anthropic_chat(
     system prompt is provided."""
     import anthropic
 
-    client = anthropic.Anthropic()
+    client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
     model = model or settings.AGENT_MODEL
     kwargs: dict[str, Any] = {
         "model": model,

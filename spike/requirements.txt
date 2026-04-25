@@ -1,4 +1,0 @@
-openreward
-openai
-pydantic>=2
-python-dotenv

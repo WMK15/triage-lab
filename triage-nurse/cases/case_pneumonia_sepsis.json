@@ -1,0 +1,53 @@
+{
+  "id": "case-pneumonia-sepsis",
+  "name": "Patient F",
+  "age": 82,
+  "sex": "M",
+  "presenting_complaint": "Three days of cough and increasing breathlessness; carer brought him in because he 'just isn't himself today.'",
+  "vitals_initial": {
+    "hr": 104,
+    "sbp": 118,
+    "dbp": 70,
+    "rr": 24,
+    "spo2": 91,
+    "temp_c": 37.4
+  },
+  "history": "COPD on tiotropium, type 2 diabetes on metformin, mild dementia. Lives in a care home. Reports feeling 'a bit tired' but denies pain (NRS 0/10). AVPU=A but slow to answer questions. Eating less for two days.",
+  "persona": "stoic",
+  "true_diagnosis": "Bacterial pneumonia with sepsis",
+  "icd10": "J15.9",
+  "trajectory": [
+    {
+      "time_offset_min": 0,
+      "state": "Quiet, no obvious distress. RR 24, SpO2 91% on room air. Crackles right base. Looks comfortable enough that triage could under-call this.",
+      "requires_intervention": false
+    },
+    {
+      "time_offset_min": 30,
+      "state": "If sepsis-6 bundle started promptly: oxygen titrated to 94-96%, blood cultures + lactate drawn, IV antibiotics within the hour. Lactate 3.2.",
+      "requires_intervention": true
+    },
+    {
+      "time_offset_min": 60,
+      "state": "If reassessment delayed: SBP drifts to 96, HR 118, becomes confused (AVPU=V). Now overt septic shock. Needs vasopressor decision and ICU referral.",
+      "requires_intervention": true
+    },
+    {
+      "time_offset_min": 120,
+      "state": "Disposition: ward admission with respiratory + microbiology input if recognised early; ICU/HDU if recognition delayed.",
+      "requires_intervention": true
+    }
+  ],
+  "confirmatory_tests": [
+    "Chest X-ray",
+    "Venous blood gas + lactate",
+    "Blood cultures x2 prior to antibiotics",
+    "CRP, white cell count, urea (CURB-65 score)"
+  ],
+  "red_herrings": [
+    "Temp only 37.4 — elderly often do not mount a fever",
+    "Patient denies pain (NRS 0) and is not visibly distressed",
+    "Carer's 'not himself' is the only soft signal of sepsis-related delirium"
+  ],
+  "narrative_role": "silent_deterioration"
+}

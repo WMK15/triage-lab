@@ -91,7 +91,10 @@ export default function EpisodesIndexPage() {
           <ul className="space-y-3">
             {episodes.map((episode) => (
               <li key={episode.id}>
-                <div className="rounded-2xl border border-border bg-surface p-4 shadow-sm">
+                <Link
+                  href={`/episodes/${episode.id}`}
+                  className="block rounded-2xl border border-border bg-surface p-4 shadow-sm transition-colors hover:bg-[var(--surface-secondary)]"
+                >
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <p className="truncate font-mono text-[13px] text-foreground">
@@ -116,7 +119,7 @@ export default function EpisodesIndexPage() {
                       )}
                     </div>
                   </div>
-                </div>
+                </Link>
               </li>
             ))}
           </ul>

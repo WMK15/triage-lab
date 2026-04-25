@@ -1,0 +1,44 @@
+{
+  "id": "case-corneal-abrasion",
+  "name": "Patient E",
+  "age": 71,
+  "sex": "M",
+  "presenting_complaint": "Right eye pain and watering since this morning after gardening; feels like there is something in the eye.",
+  "vitals_initial": {
+    "hr": 84,
+    "sbp": 160,
+    "dbp": 100,
+    "rr": 18,
+    "spo2": 98,
+    "temp_c": 36.6
+  },
+  "history": "Hypertension (untreated, baseline SBP often 150-165). Otherwise independent. Walked himself in by private vehicle. NRS 2/10 foreign-body sensation, no visual loss. AVPU=A. No contact lens use.",
+  "persona": "stoic",
+  "true_diagnosis": "Corneal abrasion",
+  "icd10": "S05.00",
+  "trajectory": [
+    {
+      "time_offset_min": 0,
+      "state": "Alert, comfortable, mild watering of right eye. Vitals stable apart from chronic hypertension.",
+      "requires_intervention": false
+    },
+    {
+      "time_offset_min": 30,
+      "state": "Topical anaesthetic + fluorescein staining shows linear corneal abrasion, no penetrating injury. Pain relieved.",
+      "requires_intervention": false
+    },
+    {
+      "time_offset_min": 60,
+      "state": "Lubricating drops + chloramphenicol prescribed. Safety-net advice for worsening vision/pain. Discharged.",
+      "requires_intervention": false
+    }
+  ],
+  "confirmatory_tests": [
+    "Slit lamp + fluorescein examination",
+    "Visual acuity check"
+  ],
+  "red_herrings": [
+    "BP is high but is chronic, not acute"
+  ],
+  "narrative_role": "routine"
+}

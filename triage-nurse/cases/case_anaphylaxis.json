@@ -1,0 +1,51 @@
+{
+  "id": "case-anaphylaxis",
+  "name": "Patient D",
+  "age": 24,
+  "sex": "F",
+  "presenting_complaint": "Skin rash and tongue swelling that began ~20 minutes after eating a peanut-containing dessert at a friend's house.",
+  "vitals_initial": {
+    "hr": 125,
+    "sbp": 108,
+    "dbp": 64,
+    "rr": 22,
+    "spo2": 96,
+    "temp_c": 37.0
+  },
+  "history": "Known peanut allergy, carries an EpiPen but did not use it because 'it didn't seem that bad at first.' Generalised urticaria, lip and tongue swelling, mild stridor when listened to closely. NRS 5/10 throat tightness. AVPU=A.",
+  "persona": "minimizing",
+  "true_diagnosis": "Anaphylaxis due to food",
+  "icd10": "T78.00",
+  "trajectory": [
+    {
+      "time_offset_min": 0,
+      "state": "Urticaria over trunk, lip swelling, mild stridor. HR 125, BP 108/64. Speaking in full sentences but voice slightly hoarse.",
+      "requires_intervention": true
+    },
+    {
+      "time_offset_min": 10,
+      "state": "If IM adrenaline 0.5mg given promptly + IV access + steroids/antihistamines: stridor resolves, BP stable, observation 4-6h then discharge.",
+      "requires_intervention": true
+    },
+    {
+      "time_offset_min": 30,
+      "state": "If adrenaline withheld waiting on antihistamines alone: SBP drops to 88, stridor worsens, biphasic risk rises. Now needs second adrenaline dose and possible airway support.",
+      "requires_intervention": true
+    },
+    {
+      "time_offset_min": 90,
+      "state": "Stable, discharged on PO prednisolone + EpiPen prescription + allergy referral, OR admitted for biphasic observation if late presentation.",
+      "requires_intervention": false
+    }
+  ],
+  "confirmatory_tests": [
+    "Clinical diagnosis (anaphylaxis criteria)",
+    "Serum tryptase at 1-2h and 24h (confirmatory, not for ED decision)",
+    "Allergy/immunology referral"
+  ],
+  "red_herrings": [
+    "Patient minimizes severity ('it's just a rash, I'll be fine')",
+    "BP still 'normal' at triage despite tachycardia and stridor"
+  ],
+  "narrative_role": "crisis"
+}
