@@ -29,8 +29,8 @@ from .config import require_llm_key, settings
 
 LOCAL_URL = "http://localhost:8080"
 # OpenReward server-side env name isn't fully documented; the spike showed it
-# lowercases the class name. Try a few likely candidates.
-ENV_NAMES = ("triagenv", "TriageEnv", "triage_env")
+# lowercases the class name. Try a few likely candidates for v2.
+ENV_NAMES = ("triagebatchenv", "TriageBatchEnv", "triage_batch_env", "triagenv")
 
 
 def _connect_env(client: OpenReward) -> tuple[Any, str]:

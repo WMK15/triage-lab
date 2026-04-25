@@ -1,7 +1,8 @@
-"""Pydantic dataclasses for the world. Pure data — no behavior here.
+"""World state for the triage-batch v2 env.
 
-Owned by sub-agent A. Field names locked in Phase 1 before sub-agents spawn;
-the shapes below are placeholders that the smoke test depends on.
+Strictly less than v1: just patients, vitals, and a small trajectory.
+No nurses, no consultants, no families, no event queue. The "world" is the
+five patients in the waiting room and the agent's classifications so far.
 """
 from __future__ import annotations
 
@@ -9,11 +10,20 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-Persona = Literal["stoic", "anxious", "minimizing", "confused"]
-NarrativeRole = Literal[
-    "routine", "silent_deterioration", "social_complication", "crisis"
+KtasLevel = Literal[1, 2, 3, 4, 5]
+KtasName = Literal[
+    "immediate", "very_urgent", "urgent", "standard", "not_urgent"
 ]
-Severity = Literal["low", "moderate", "high", "critical"]
+MentalState = Literal["alert", "verbal", "pain", "unresponsive"]
+
+KTAS_NAMES: dict[int, str] = {
+    1: "immediate",
+    2: "very_urgent",
+    3: "urgent",
+    4: "standard",
+    5: "not_urgent",
+}
+KTAS_LEVELS: dict[str, int] = {v: k for k, v in KTAS_NAMES.items()}
 
 
 class Vitals(BaseModel):
@@ -33,61 +43,20 @@ class TrajectoryStep(BaseModel):
 
 class Patient(BaseModel):
     id: str
-    name: str
     age: int
     sex: Literal["F", "M"]
-    presenting_complaint: str
-    vitals: Vitals
+    chief_complaint: str
     history: str
-    persona: Persona
-    true_diagnosis: str
-    icd10: str
+    mental_state: MentalState
+    nrs_pain: int | None
+    vitals: Vitals
     trajectory: list[TrajectoryStep]
-    confirmatory_tests: list[str]
-    red_herrings: list[str] = Field(default_factory=list)
-    narrative_role: NarrativeRole
-    arrived_at_min: int = 0
-
-
-class Nurse(BaseModel):
-    id: str
-    name: str
-    fatigue: float = 0.0
-    relationship: float = 0.5  # 0..1; degraded by being talked over
-
-
-class Consultant(BaseModel):
-    id: str
-    specialty: Literal["cardiology", "neurology", "surgery", "psych", "pediatrics"]
-    name: str
-    cooperation: float = 1.0  # 0..1; degraded by reflexive early calls
-    available: bool = True
-
-
-class FamilyMember(BaseModel):
-    patient_id: str
-    relation: str
-    distress: float = 0.3
-
-
-class Event(BaseModel):
-    fires_at_min: int
-    kind: str
-    patient_id: str | None = None
-    payload: dict = Field(default_factory=dict)
-
-
-class EventQueue(BaseModel):
-    """Ordered by fires_at_min; pop() returns the next due event."""
-
-    events: list[Event] = Field(default_factory=list)
+    ground_truth_ktas: KtasLevel
 
 
 class WorldState(BaseModel):
     sim_time_min: int = 0
-    patients: dict[str, Patient] = Field(default_factory=dict)
-    nurses: dict[str, Nurse] = Field(default_factory=dict)
-    consultants: dict[str, Consultant] = Field(default_factory=dict)
-    families: dict[str, FamilyMember] = Field(default_factory=dict)
-    event_queue: EventQueue = Field(default_factory=EventQueue)
+    patients: dict[str, Patient]
+    assigned: dict[str, KtasLevel | None] = Field(default_factory=dict)
+    charts: dict[str, list[str]] = Field(default_factory=dict)
     seed: int = 0
