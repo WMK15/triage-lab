@@ -13,10 +13,12 @@ The env loads each referenced case at __init__ time, overriding
 
 API verified against openreward==0.1.106 on 2026-04-25.
 """
+
 from __future__ import annotations
 
 import asyncio
 import json
+import os
 from pathlib import Path
 from typing import Any, Literal
 
@@ -79,9 +81,7 @@ class ReflectParams(BaseModel):
 
 class SubmitHandoffParams(BaseModel):
     patient_id: str
-    disposition: Literal[
-        "admit", "discharge", "observe", "transfer", "deceased"
-    ]
+    disposition: Literal["admit", "discharge", "observe", "transfer", "deceased"]
     notes: str
 
 
@@ -230,9 +230,7 @@ class TriageEnv(Environment):
             ]
             for pid, p in self.world.patients.items()
         }
-        self.tests_ordered: dict[str, list[str]] = {
-            pid: [] for pid in self.world.patients
-        }
+        self.tests_ordered: dict[str, list[str]] = {pid: [] for pid in self.world.patients}
         self.notes: list[str] = []  # /reflect notepad
         self.dispositioned: set[str] = set()
         self.shift_length_min: int = int(spec.get("shift_length_min", 360))
@@ -247,6 +245,17 @@ class TriageEnv(Environment):
         if not path.exists():
             return []
         spec = json.loads(path.read_text())
+        # OpenReward expects task specs to expose a top-level presenting complaint.
+        # The shift task is multi-patient, so provide a concise summary string.
+        if "presenting_complaint" not in spec:
+            arrivals = []
+            for entry in spec.get("patients", []):
+                try:
+                    raw_case = _load_case(entry["id"])
+                    arrivals.append(raw_case.get("presenting_complaint", entry["id"]))
+                except FileNotFoundError:
+                    arrivals.append(entry["id"])
+            spec["presenting_complaint"] = "; ".join(arrivals[:3])
         return [spec]
 
     @classmethod
@@ -271,12 +280,8 @@ class TriageEnv(Environment):
             "(cardiology, neurology, surgery, psych, pediatrics), or "
             "'family_<patient_id>'."
         )
-        lines.append(
-            "  - examine(patient_id): take vitals and observe the patient now."
-        )
-        lines.append(
-            "  - order(patient_id, test_name): order a test or imaging study."
-        )
+        lines.append("  - examine(patient_id): take vitals and observe the patient now.")
+        lines.append("  - order(patient_id, test_name): order a test or imaging study.")
         lines.append(
             "  - read(patient_id): read the patient's chart "
             "(history + accumulated notes + results)."
@@ -289,9 +294,7 @@ class TriageEnv(Environment):
             "  - wait(minutes): advance simulated time. Returns events that "
             "fired during the wait (arrivals, deteriorations, alerts)."
         )
-        lines.append(
-            "  - reflect(thought): private notepad — does NOT advance time."
-        )
+        lines.append("  - reflect(thought): private notepad — does NOT advance time.")
         lines.append(
             "  - submit_handoff(patient_id, disposition, notes): finalise a "
             "patient. Disposition is one of: admit, discharge, observe, "
@@ -299,13 +302,21 @@ class TriageEnv(Environment):
             "dispositioned."
         )
         lines.append("")
+        selected_case = os.getenv("TRIAGE_SELECTED_CASE", "").strip()
+        operator_note = os.getenv("TRIAGE_OPERATOR_NOTE", "").strip()
+        if selected_case:
+            lines.append(
+                f"Frontend intake hint: the operator believes case '{selected_case}' is the closest anchor for this shift."
+            )
+        if operator_note:
+            lines.append(f"Operator note from frontend: {operator_note}")
+        if selected_case or operator_note:
+            lines.append("")
         lines.append(
             "Expected arrivals on this shift (use the patient_id verbatim "
             "in tool calls — these strings are the canonical IDs):"
         )
-        for _pid, p in sorted(
-            self.world.patients.items(), key=lambda kv: kv[1].arrived_at_min
-        ):
+        for _pid, p in sorted(self.world.patients.items(), key=lambda kv: kv[1].arrived_at_min):
             lines.append(
                 f'  - patient_id="{p.id}" — arriving at +{p.arrived_at_min} min'
                 f" — {p.presenting_complaint}"
@@ -357,9 +368,7 @@ class TriageEnv(Environment):
 
         # Nurse
         if aid in self.world.nurses:
-            reply, new_nurse = actor_logic.nurse_speak(
-                self.world.nurses[aid], params.utterance
-            )
+            reply, new_nurse = actor_logic.nurse_speak(self.world.nurses[aid], params.utterance)
             self.world.nurses[aid] = new_nurse
             self._summary(f"speak nurse {aid}: {params.utterance[:60]}")
             return ToolOutput(
@@ -377,8 +386,7 @@ class TriageEnv(Environment):
             )
             self.world.consultants[aid] = new_c
             self._summary(
-                f"speak consultant {aid}: {params.utterance[:60]}"
-                f" -> coop={new_c.cooperation:.2f}"
+                f"speak consultant {aid}: {params.utterance[:60]} -> coop={new_c.cooperation:.2f}"
             )
             return ToolOutput(
                 blocks=[TextBlock(type="text", text=f"Dr. {aid.title()}: {reply}")],
@@ -511,9 +519,7 @@ class TriageEnv(Environment):
             )
 
         self.tests_ordered[patient.id].append(params.test_name)
-        self.outcomes[patient.id]["confirmatory_tests_ordered"].append(
-            params.test_name
-        )
+        self.outcomes[patient.id]["confirmatory_tests_ordered"].append(params.test_name)
 
         if _matches_confirmatory(params.test_name, patient.confirmatory_tests):
             # Supportive finding for the true diagnosis.
@@ -598,16 +604,11 @@ class TriageEnv(Environment):
                 # Detect a *new* intervention threshold crossed during this wait.
                 pre_due = patient_logic.required_interventions_due(p, before)
                 self._refresh_patient(pid)
-                post_due = patient_logic.required_interventions_due(
-                    self.world.patients[pid], after
-                )
+                post_due = patient_logic.required_interventions_due(self.world.patients[pid], after)
                 # Anything in post but not in pre was newly crossed.
                 newly = [s for s in post_due if s not in pre_due]
                 for s in newly:
-                    events.append(
-                        f"DETERIORATION: {p.name} ({pid}) — "
-                        f"{s[:120]}"
-                    )
+                    events.append(f"DETERIORATION: {p.name} ({pid}) — {s[:120]}")
 
         # Shift-end signal
         if after >= self.shift_length_min and before < self.shift_length_min:
@@ -671,15 +672,11 @@ class TriageEnv(Environment):
         po["agent_disposition"] = params.disposition
         po["agent_diagnosis"] = params.notes  # parsed loosely by scoring
         po["time_to_disposition_min"] = float(self.world.sim_time_min)
-        acceptable = _ACCEPTABLE_DISPOSITIONS.get(
-            patient.narrative_role, set()
-        )
+        acceptable = _ACCEPTABLE_DISPOSITIONS.get(patient.narrative_role, set())
         po["correct_disposition"] = params.disposition in acceptable
         # Did we miss required interventions before submitting? Each missed
         # one bumps adverse_events.
-        missed = patient_logic.required_interventions_due(
-            patient, self.world.sim_time_min
-        )
+        missed = patient_logic.required_interventions_due(patient, self.world.sim_time_min)
         # Heuristic: any required intervention that fired more than 30 minutes
         # ago without a corresponding ordered test counts as a delay.
         po["adverse_events"] = sum(
@@ -696,8 +693,7 @@ class TriageEnv(Environment):
             po["survived"] = False
 
         self._summary(
-            f"submit {patient.id}: {params.disposition}"
-            f" (correct={po['correct_disposition']})"
+            f"submit {patient.id}: {params.disposition} (correct={po['correct_disposition']})"
         )
 
         # Per-patient reward signal so the agent gets feedback before episode end.
@@ -721,9 +717,7 @@ class TriageEnv(Environment):
 
         # All patients dispositioned — run final scoring + judge inside the tool.
         try:
-            judge_dims = asyncio.run(
-                judge.judge(self.summary, self.outcomes)
-            )
+            judge_dims = asyncio.run(judge.judge(self.summary, self.outcomes))
         except Exception as exc:  # noqa: BLE001 — judge failures fall back
             judge_dims = {
                 "defensibility": 0.5,
@@ -733,9 +727,7 @@ class TriageEnv(Environment):
             }
             self._summary(f"judge failed, using neutral fallback: {exc}")
 
-        breakdown = scoring.score_episode(
-            self.world, self.summary, outcomes=self.outcomes
-        )
+        breakdown = scoring.score_episode(self.world, self.summary, outcomes=self.outcomes)
         composite = scoring.composite_with_judge(breakdown.hard, judge_dims)
 
         text_lines = [

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -12,37 +12,50 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { ENVIRONMENT_OPTIONS } from "@/lib/triage/mock-agent";
-import type { EnvironmentType } from "@/lib/triage/types";
-
-const PLACEHOLDERS: Record<EnvironmentType, string> = {
-  general:
-    "Describe the situation. What's happening, what's at stake, and what decision are you trying to make?",
-  planning:
-    "e.g. New-build extension submitted, neighbour objection on overlooking grounds, awaiting officer review.",
-  clinical:
-    "e.g. 58 y/o with chest tightness for 2 hours, BP 142/88, HR 96, no prior cardiac history.",
-  compliance:
-    "e.g. Vendor SOC 2 report shows a control exception in access reviews; renewal is in 3 weeks.",
-  incident:
-    "e.g. p99 latency on checkout-api jumped 4× at 14:02 UTC, correlates with the 13:58 deploy.",
-};
+import type { IntakeSuggestion, LiveTaskOption } from "@/lib/triage/types";
 
 type Props = {
   isRunning: boolean;
-  onSubmit: (scenario: string, environment: EnvironmentType) => void;
+  tasks: LiveTaskOption[];
+  onSubmit: (scenario: string, taskId: string) => void;
 };
 
-export function InputPanel({ isRunning, onSubmit }: Props) {
+export function InputPanel({ isRunning, tasks, onSubmit }: Props) {
   const [scenario, setScenario] = useState("");
-  const [environment, setEnvironment] = useState<EnvironmentType>("general");
+  const [taskId, setTaskId] = useState<string>(tasks[0]?.id ?? "");
+  const [suggestions, setSuggestions] = useState<IntakeSuggestion[]>([]);
+
+  const selectedTask = tasks.find((task) => task.id === taskId) ?? tasks[0] ?? null;
+
+  useEffect(() => {
+    if (!scenario.trim()) {
+      return;
+    }
+
+    const timeout = setTimeout(async () => {
+      const response = await fetch("/api/triage/intake", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: scenario }),
+      });
+      if (!response.ok) return;
+      const payload = (await response.json()) as { suggestions: IntakeSuggestion[] };
+      setSuggestions(payload.suggestions);
+      if (payload.suggestions[0]?.taskId) {
+        setTaskId(payload.suggestions[0].taskId);
+      }
+    }, 250);
+
+    return () => clearTimeout(timeout);
+  }, [scenario]);
 
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault();
     const trimmed = scenario.trim();
-    if (!trimmed || isRunning) return;
-    onSubmit(trimmed, environment);
+    if (!trimmed || isRunning || !selectedTask) return;
+    onSubmit(trimmed, selectedTask.id);
     setScenario("");
+    setSuggestions([]);
   };
 
   return (
@@ -56,31 +69,23 @@ export function InputPanel({ isRunning, onSubmit }: Props) {
             htmlFor="scenario"
             className="text-xs font-medium uppercase tracking-wider text-[var(--text-secondary)]"
           >
-            Scenario
+            Intake note
           </Label>
           <div className="flex items-center gap-2">
-            <Label
-              htmlFor="environment"
-              className="text-xs text-[var(--text-muted)]"
-            >
-              Environment
+            <Label htmlFor="task" className="text-xs text-[var(--text-muted)]">
+              Case
             </Label>
-            <Select
-              value={environment}
-              onValueChange={(value) =>
-                setEnvironment(value as EnvironmentType)
-              }
-            >
-              <SelectTrigger id="environment" className="h-8 min-w-[180px]">
-                <SelectValue placeholder="Select environment" />
+            <Select value={taskId} onValueChange={setTaskId}>
+              <SelectTrigger id="task" className="h-8 min-w-[240px]">
+                <SelectValue placeholder="Select case" />
               </SelectTrigger>
               <SelectContent>
-                {ENVIRONMENT_OPTIONS.map((opt) => (
-                  <SelectItem key={opt.value} value={opt.value}>
+                {tasks.map((task) => (
+                  <SelectItem key={task.id} value={task.id}>
                     <div className="flex flex-col items-start">
-                      <span className="text-sm">{opt.label}</span>
+                      <span className="text-sm">{task.label}</span>
                       <span className="text-[11px] text-[var(--text-muted)]">
-                        {opt.hint}
+                        {task.narrativeRole.replaceAll("_", " ")}
                       </span>
                     </div>
                   </SelectItem>
@@ -94,25 +99,66 @@ export function InputPanel({ isRunning, onSubmit }: Props) {
           id="scenario"
           value={scenario}
           onChange={(e) => setScenario(e.target.value)}
-          placeholder={PLACEHOLDERS[environment]}
+          placeholder={
+            "Describe the patient complaint in plain language. The app will suggest the closest live case and run it with your note."
+          }
           className="min-h-[120px] resize-none border-border bg-[var(--surface-secondary)]/40 text-[15px] leading-relaxed placeholder:text-[var(--text-muted)] focus-visible:bg-surface"
-          disabled={isRunning}
+          disabled={isRunning || !selectedTask}
         />
 
         <div className="flex items-center justify-between pt-1">
-          <p className="text-xs text-[var(--text-muted)]">
-            Output: structured decision + standardised actions.
-          </p>
+          <div className="text-xs text-[var(--text-muted)]">
+            {suggestions[0] ? (
+              <>
+                <p>
+                  Best dataset match: {suggestions[0].diagnosis} via {suggestions[0].caseLabel}
+                </p>
+                <p className="mt-1">Expected route: {suggestions[0].disposition}</p>
+              </>
+            ) : selectedTask ? (
+              <>
+                <p>{selectedTask.hint}</p>
+                <p className="mt-1">Expected route: {selectedTask.expectedDisposition}</p>
+              </>
+            ) : (
+              <p>Select a case to enable live runs.</p>
+            )}
+          </div>
           <Button
             type="submit"
-            disabled={isRunning || !scenario.trim()}
+            disabled={isRunning || !scenario.trim() || !selectedTask}
             className="rounded-full bg-[var(--accent)] px-5 text-[var(--accent-foreground)] shadow-none hover:bg-[var(--accent-hover)] hover:text-[var(--accent-foreground)]"
           >
             <Send className="h-4 w-4" />
-            {isRunning ? "Running…" : "Run simulation"}
+            {isRunning ? "Running…" : "Run live case"}
           </Button>
         </div>
       </div>
+
+      {suggestions.length > 0 ? (
+        <div className="mt-4 rounded-xl border border-[var(--thinking-border)] bg-[var(--thinking-bg)] px-4 py-3">
+          <p className="text-[12px] font-semibold uppercase tracking-wider text-[var(--thinking-text)]">
+            Intake matches
+          </p>
+          <ul className="mt-2 space-y-2 text-[12.5px] text-[var(--text-secondary)]">
+            {suggestions.map((suggestion) => (
+              <li key={`${suggestion.taskId}-${suggestion.diagnosis}`}>
+                <button
+                  type="button"
+                  onClick={() => setTaskId(suggestion.taskId)}
+                  className="w-full rounded-lg px-2 py-1 text-left hover:bg-white/40"
+                >
+                  <span className="font-medium text-foreground">{suggestion.caseLabel}</span>
+                  {" · "}
+                  {suggestion.diagnosis}
+                  {" · "}
+                  {Math.round(suggestion.score * 100)}% match
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
     </form>
   );
 }
