@@ -6,9 +6,9 @@ const datasetDir = path.join(root, "dataset");
 
 const EMERGENCY_TRIAGE_CSV = path.join(datasetDir, "emergency-triage-cleaned.csv");
 const SYMPTOM_REFERENCE_CSV = path.join(datasetDir, "symptom-triage-reference.csv");
-const ED_TRIAGE_CSV = path.join(datasetDir, "ed", "triage.csv");
-const ED_DIAGNOSIS_CSV = path.join(datasetDir, "ed", "diagnosis.csv");
-const ED_STAYS_CSV = path.join(datasetDir, "ed", "edstays.csv");
+const ED_TRIAGE_CSV = path.join(datasetDir, "mimic-iv-ed-triage.csv");
+const ED_DIAGNOSIS_CSV = path.join(datasetDir, "mimic-iv-ed-diagnosis.csv");
+const ED_STAYS_CSV = path.join(datasetDir, "mimic-iv-ed-edstays.csv");
 const OUTPUT_CSV = path.join(datasetDir, "combined-triage-reference.csv");
 
 function parseDelimitedLine(line, delimiter) {

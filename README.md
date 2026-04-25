@@ -152,6 +152,9 @@ The repository includes several local dataset files under `dataset/`.
 - `combined-triage-reference.csv`
 - `emergency-triage-cleaned.csv`
 - `symptom-triage-reference.csv`
+- `mimic-iv-ed-triage.csv`
+- `mimic-iv-ed-diagnosis.csv`
+- `mimic-iv-ed-edstays.csv`
 
 These files are used for intake matching, task construction, and evaluation support. See `dataset/README.md` for schema notes, quality caveats, and field descriptions.
 

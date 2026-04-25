@@ -13,28 +13,28 @@ Dates have been shifted for deidentification — they are internally consistent 
 
 | File | Rows (demo) | What it contains |
 |------|-------------|-----------------|
-| `edstays.csv` | 222 | One row per ED visit — the master tracking table |
-| `triage.csv` | 222 | Vital signs and acuity level recorded at triage |
-| `vitalsign.csv` | 1,038 | Repeated vital sign measurements throughout the stay |
-| `diagnosis.csv` | 545 | ICD-coded diagnoses assigned at discharge |
-| `medrecon.csv` | 2,764 | Medications the patient reported taking on arrival |
-| `pyxis.csv` | 1,082 | Medications dispensed from the ED Pyxis cabinet |
+| `mimic-iv-ed-edstays.csv` | 222 | One row per ED visit — the master tracking table |
+| `mimic-iv-ed-triage.csv` | 222 | Vital signs and acuity level recorded at triage |
+| `mimic-iv-ed-vitalsign.csv` | 1,038 | Repeated vital sign measurements throughout the stay |
+| `mimic-iv-ed-diagnosis.csv` | 545 | ICD-coded diagnoses assigned at discharge |
+| `mimic-iv-ed-medrecon.csv` | 2,764 | Medications the patient reported taking on arrival |
+| `mimic-iv-ed-pyxis.csv` | 1,082 | Medications dispensed from the ED Pyxis cabinet |
 
 ### How the tables link
 
-All tables share `subject_id` (patient) and `stay_id` (single ED visit) as join keys. `edstays` is the anchor — every other table's `stay_id` references a row there. `hadm_id` links to the broader MIMIC-IV clinical database for patients who were admitted.
+All tables share `subject_id` (patient) and `stay_id` (single ED visit) as join keys. `mimic-iv-ed-edstays.csv` is the anchor — every other table's `stay_id` references a row there. `hadm_id` links to the broader MIMIC-IV clinical database for patients who were admitted.
 
 ```
-edstays (stay_id) ──┬── triage
-                    ├── vitalsign
-                    ├── diagnosis
-                    ├── medrecon
-                    └── pyxis
+mimic-iv-ed-edstays ──┬── mimic-iv-ed-triage
+                      ├── mimic-iv-ed-vitalsign
+                      ├── mimic-iv-ed-diagnosis
+                      ├── mimic-iv-ed-medrecon
+                      └── mimic-iv-ed-pyxis
 ```
 
 ---
 
-## Table: `edstays.csv`
+## Table: `mimic-iv-ed-edstays.csv`
 
 One row per ED visit. The master index for all other tables.
 
@@ -54,7 +54,7 @@ One row per ED visit. The master index for all other tables.
 
 ---
 
-## Table: `triage.csv`
+## Table: `mimic-iv-ed-triage.csv`
 
 One row per ED visit. Vital signs and acuity level recorded by the triage nurse at the start of the visit, before full assessment.
 
@@ -78,7 +78,7 @@ One row per ED visit. Vital signs and acuity level recorded by the triage nurse 
 
 ---
 
-## Table: `vitalsign.csv`
+## Table: `mimic-iv-ed-vitalsign.csv`
 
 Multiple rows per ED visit — repeated vital sign measurements taken throughout the stay (not just at triage). Each row is one measurement snapshot.
 
@@ -100,7 +100,7 @@ Multiple rows per ED visit — repeated vital sign measurements taken throughout
 
 ---
 
-## Table: `diagnosis.csv`
+## Table: `mimic-iv-ed-diagnosis.csv`
 
 One row per diagnosis per ED visit. A single visit typically has multiple diagnoses assigned at discharge.
 
@@ -119,7 +119,7 @@ One row per diagnosis per ED visit. A single visit typically has multiple diagno
 
 ---
 
-## Table: `medrecon.csv`
+## Table: `mimic-iv-ed-medrecon.csv`
 
 Medication reconciliation — medications the patient reported taking at home, recorded by nursing staff on ED admission. Multiple rows per visit (one per medication, potentially with multiple drug class rows per medication).
 
@@ -139,7 +139,7 @@ Medication reconciliation — medications the patient reported taking at home, r
 
 ---
 
-## Table: `pyxis.csv`
+## Table: `mimic-iv-ed-pyxis.csv`
 
 Medications dispensed from the Pyxis automated cabinet in the ED — i.e. drugs actually given to the patient during their stay. Multiple rows per visit.
 
