@@ -12,6 +12,7 @@ and harness; cumulative spend is reset per episode and capped at
 
 Reference pattern (verified working): ``spike/harness_spike.py``.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -156,9 +157,7 @@ def run_task(
                         },
                     )
                     tr = session.call_tool(tc.function.name, args)
-                    text = "".join(
-                        getattr(b, "text", str(b)) for b in getattr(tr, "blocks", [])
-                    )
+                    text = "".join(getattr(b, "text", str(b)) for b in getattr(tr, "blocks", []))
                     reward = float(getattr(tr, "reward", 0.0) or 0.0)
                     fin = bool(getattr(tr, "finished", False))
                     cumulative_reward += reward
@@ -183,9 +182,7 @@ def run_task(
                             "cumulative": cumulative_reward,
                         },
                     )
-                    messages.append(
-                        {"role": "tool", "tool_call_id": tc.id, "content": text}
-                    )
+                    messages.append({"role": "tool", "tool_call_id": tc.id, "content": text})
                     if fin:
                         finished = True
                         composite_score = reward
@@ -254,9 +251,7 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Print available tasks as JSON and exit. Does NOT need an LLM key or env server.",
     )
-    p.add_argument(
-        "--split", default="test", help="Split to list tasks from (default: test)"
-    )
+    p.add_argument("--split", default="test", help="Split to list tasks from (default: test)")
     args = p.parse_args(argv)
 
     if args.list_tasks:
@@ -275,7 +270,7 @@ def main(argv: list[str] | None = None) -> int:
     env, name = _connect_env(client)
     print(f"[harness] connected to env: {name}")
 
-    tasks = env.list_tasks(split="test")
+    tasks = env.list_tasks(split=args.split)
     if args.task != "all":
         tasks = [t for t in tasks if _task_spec(t).get("id") == args.task]
         if not tasks:

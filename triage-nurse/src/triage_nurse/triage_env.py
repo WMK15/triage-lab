@@ -6,6 +6,7 @@ deterioration alerts and write_note() for the chart.
 
 API verified against openreward==0.1.106.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -49,7 +50,8 @@ def _build_world(task_spec: dict[str, Any]) -> WorldState:
     if not row_indices:
         seed = int(task_spec.get("seed", 0))
         n = int(task_spec.get("n", 5))
-        row_indices = dataset.select_diverse_batch(seed=seed, n=n)
+        split = str(task_spec.get("split", "test"))
+        row_indices = dataset.select_diverse_batch(seed=seed, n=n, split=split)
     patients: dict[str, Patient] = {}
     charts: dict[str, list[str]] = {}
     assigned: dict[str, KtasLevel | None] = {}
@@ -107,26 +109,7 @@ class TriageBatchEnv(Environment):
 
     @classmethod
     def list_tasks(cls, split: str) -> list[JSONObject]:
-        """A handful of pre-seeded batches for the demo split, parameterised
-        by seed. Each task picks 5 KTAS-diverse rows from the CSV."""
-        seeds = (42, 7, 99) if split == "test" else (0, 1, 2)
-        out: list[JSONObject] = []
-        for s in seeds:
-            row_indices = dataset.select_diverse_batch(seed=s, n=5)
-            ground_truth = [dataset.load_row(i).ground_truth_ktas for i in row_indices]
-            out.append(
-                {
-                    "id": f"batch-seed{s}",
-                    "name": f"Triage Batch (seed {s})",
-                    "row_indices": row_indices,
-                    "ground_truth_ktas": ground_truth,
-                    "max_turns": 50,
-                    "shift_length_min": 60,
-                    "seed": s,
-                    "n": 5,
-                }
-            )
-        return out
+        return dataset.list_task_specs(split=split, n=5)
 
     @classmethod
     def list_splits(cls):
@@ -142,21 +125,11 @@ class TriageBatchEnv(Environment):
         )
         lines.append("")
         lines.append("Levels (each is its own tool):")
-        lines.append(
-            "  - assign_immediate     KTAS 1, life-threatening, needs resuscitation now"
-        )
-        lines.append(
-            "  - assign_very_urgent   KTAS 2, high risk of rapid deterioration"
-        )
-        lines.append(
-            "  - assign_urgent        KTAS 3, significant pathology, stable"
-        )
-        lines.append(
-            "  - assign_standard      KTAS 4, stable, non-emergent"
-        )
-        lines.append(
-            "  - assign_not_urgent    KTAS 5, could be managed in primary care"
-        )
+        lines.append("  - assign_immediate     KTAS 1, life-threatening, needs resuscitation now")
+        lines.append("  - assign_very_urgent   KTAS 2, high risk of rapid deterioration")
+        lines.append("  - assign_urgent        KTAS 3, significant pathology, stable")
+        lines.append("  - assign_standard      KTAS 4, stable, non-emergent")
+        lines.append("  - assign_not_urgent    KTAS 5, could be managed in primary care")
         lines.append("")
         lines.append("Other tools:")
         lines.append(
@@ -164,8 +137,7 @@ class TriageBatchEnv(Environment):
             "deteriorates while waiting."
         )
         lines.append(
-            "  - write_note(patient_id, note): record an observation. Does "
-            "not advance time."
+            "  - write_note(patient_id, note): record an observation. Does not advance time."
         )
         lines.append("")
         lines.append(
@@ -205,10 +177,7 @@ class TriageBatchEnv(Environment):
                 blocks=[
                     TextBlock(
                         type="text",
-                        text=(
-                            f"No patient {patient_id!r}. Valid IDs: "
-                            f"{list(self.world.patients)}"
-                        ),
+                        text=(f"No patient {patient_id!r}. Valid IDs: {list(self.world.patients)}"),
                     )
                 ],
                 reward=-0.05,
@@ -254,14 +223,15 @@ class TriageBatchEnv(Environment):
         if self._all_assigned():
             breakdown = scoring.score_batch(self._assignments)
             text_lines = [
-                f"All {self._n_total} patients assigned. "
-                f"Composite: {breakdown.composite:.3f}",
+                f"All {self._n_total} patients assigned. Composite: {breakdown.composite:.3f}",
                 f"  Base (mean per-patient): {breakdown.base_reward:.3f}",
                 f"  Ordering bonus: {breakdown.ordering_bonus:+.2f}",
             ]
             for a in breakdown.per_assignment:
-                tag = "match" if a.agent_level == a.truth_level else (
-                    "over" if a.agent_level < a.truth_level else "UNDER"
+                tag = (
+                    "match"
+                    if a.agent_level == a.truth_level
+                    else ("over" if a.agent_level < a.truth_level else "UNDER")
                 )
                 text_lines.append(
                     f"  {a.patient_id}: agent KTAS {a.agent_level} "
@@ -274,9 +244,7 @@ class TriageBatchEnv(Environment):
             )
 
         # Mid-episode: one patient down, more to go.
-        remaining = self._n_total - sum(
-            1 for v in self.world.assigned.values() if v is not None
-        )
+        remaining = self._n_total - sum(1 for v in self.world.assigned.values() if v is not None)
         return ToolOutput(
             blocks=[
                 TextBlock(
@@ -308,10 +276,7 @@ class TriageBatchEnv(Environment):
             if self.world.assigned[pid] is not None:
                 continue  # already classified, no alerts
             for step in p.trajectory:
-                if (
-                    before < step.time_offset_min <= after
-                    and step.requires_intervention
-                ):
+                if before < step.time_offset_min <= after and step.requires_intervention:
                     alerts.append(f"{pid}: {step.state}")
 
         self._summary(f"wait {minutes}m -> t+{after}m, {len(alerts)} alert(s)")

@@ -2,27 +2,31 @@
 
 Reads dataset/emergency-triage.csv (semicolon-separated, n=1267) on first
 access, decodes the categorical encodings documented in dataset/README.md,
-and exposes two helpers consumed by the env:
+and exposes helpers consumed by the env:
 
   - load_row(row_index) -> Patient
-  - select_diverse_batch(seed, n=5) -> list[int] of valid row indices
+  - split_row_indices(split) -> list[int]
+  - select_diverse_batch(seed, n=5, split=...) -> list[int] of valid row indices
+  - list_task_specs(split) -> deterministic batch tasks for OpenReward
 
-Rows with corrupt encodings (e.g. mojibake in NRS_pain) are skipped and the
-indices excluded from the valid pool. The file is read once and cached.
+The train/test split is deterministic and stratified by KTAS level. Rows with
+corrupt encodings are skipped and excluded from both splits.
 """
+
 from __future__ import annotations
 
 import csv
 import hashlib
 from pathlib import Path
+from typing import Any
 
 from .world_state import KtasLevel, MentalState, Patient, TrajectoryStep, Vitals
 
-# dataset/emergency-triage.csv lives at the repo root, two levels up from
-# this file's parent (triage-nurse/src/triage_nurse/dataset.py).
-DATASET_PATH = (
-    Path(__file__).parent.parent.parent.parent / "dataset" / "emergency-triage.csv"
-)
+# dataset CSVs live at the repo root, two levels up from this file's parent
+# (triage-nurse/src/triage_nurse/dataset.py).
+DATASET_DIR = Path(__file__).parent.parent.parent.parent / "dataset"
+COMBINED_DATASET_PATH = DATASET_DIR / "combined-triage-reference.csv"
+LEGACY_DATASET_PATH = DATASET_DIR / "emergency-triage.csv"
 
 _MENTAL_DECODE: dict[str, MentalState] = {
     "1": "alert",
@@ -165,7 +169,7 @@ def _build_history(
     return ", ".join(parts)
 
 
-def _row_to_patient(row: dict[str, str], row_index: int) -> Patient | None:
+def _legacy_row_to_patient(row: dict[str, str], row_index: int) -> Patient | None:
     """Convert one CSV row dict to a Patient. Returns None if the row is
     unusable (missing required fields, corrupt encodings)."""
     sex = _decode_sex(row.get("Sex", "").strip())
@@ -220,17 +224,152 @@ def _row_to_patient(row: dict[str, str], row_index: int) -> Patient | None:
     )
 
 
+def _normalise_combined_sex(row: dict[str, str], source: str) -> str:
+    sex = (row.get("sex") or "").strip()
+    if sex in {"F", "M"}:
+        return sex
+    decoded = _decode_sex(sex)
+    if decoded:
+        return decoded
+    return str(_SOURCE_DEFAULTS.get(source, {}).get("sex", "F"))
+
+
+def _normalise_combined_mental(row: dict[str, str], source: str) -> MentalState:
+    mental = (row.get("mental_state") or "").strip().lower()
+    if mental in {"alert", "verbal", "pain", "unresponsive"}:
+        return mental  # type: ignore[return-value]
+    if mental in {"1", "2", "3", "4"}:
+        return _decode_mental(mental)
+    return str(_SOURCE_DEFAULTS.get(source, {}).get("mental_state", "alert"))  # type: ignore[return-value]
+
+
+def _normalise_combined_temp(value: str | None) -> float | None:
+    temp = _safe_float(value)
+    if temp is None:
+        return None
+    if temp > 70:
+        return round((temp - 32) * 5 / 9, 1)
+    return temp
+
+
+def _combined_row_to_patient(row: dict[str, str], row_index: int) -> Patient | None:
+    source = (row.get("source") or "ktas").strip() or "ktas"
+    chief = (row.get("chief_complaint") or row.get("diagnosis") or "").strip()
+    if not chief:
+        return None
+
+    ktas = _parse_ktas(row.get("reference_level"))
+    if ktas is None:
+        return None
+
+    age = _safe_int(row.get("age"))
+    if age is None:
+        age = int(_SOURCE_DEFAULTS.get(source, {}).get("age", 50))
+    sex = _normalise_combined_sex(row, source)
+    mental = _normalise_combined_mental(row, source)
+
+    sbp = _safe_int(row.get("sbp"))
+    dbp = _safe_int(row.get("dbp"))
+    hr = _safe_int(row.get("hr"))
+    rr = _safe_int(row.get("rr"))
+    bt = _normalise_combined_temp(row.get("temp_c"))
+    sat = _safe_int(row.get("spo2"))
+
+    defaults = _SOURCE_DEFAULTS.get(source, _SOURCE_DEFAULTS["symptom_reference"])
+    if sbp is None:
+        sbp = int(defaults["sbp"])
+    if dbp is None:
+        dbp = int(defaults["dbp"])
+    if hr is None:
+        hr = int(defaults["hr"])
+    if rr is None:
+        rr = int(defaults["rr"])
+    if bt is None:
+        bt = float(defaults["temp_c"])
+    if sat is None or sat < 50 or sat > 100:
+        sat = int(defaults["spo2"])
+
+    pain_raw = (row.get("pain_score") or "").strip()
+    nrs_pain = _safe_int(pain_raw)
+    if nrs_pain is not None and (nrs_pain < 0 or nrs_pain > 10):
+        nrs_pain = None
+
+    pid = str((row.get("source_id") or f"row-{row_index}").strip() or f"row-{row_index}")
+    history = _build_history(age, sex, mental, nrs_pain, chief)
+
+    return Patient(
+        id=pid,
+        age=age,
+        sex=sex,  # type: ignore[arg-type]
+        chief_complaint=chief,
+        history=history,
+        mental_state=mental,
+        nrs_pain=nrs_pain,
+        vitals=Vitals(
+            hr=hr,
+            sbp=sbp,
+            dbp=dbp,
+            rr=rr,
+            spo2=sat,
+            temp_c=bt,
+        ),
+        trajectory=_synthesize_trajectory(pid, ktas, chief),
+        ground_truth_ktas=ktas,
+    )
+
+
+def _row_to_patient(row: dict[str, str], row_index: int) -> Patient | None:
+    if "reference_level" in row or "source" in row:
+        return _combined_row_to_patient(row, row_index)
+    return _legacy_row_to_patient(row, row_index)
+
+
 _rows_cache: list[dict[str, str]] | None = None
 _valid_indices_cache: dict[KtasLevel, list[int]] | None = None
+_split_indices_cache: dict[str, list[int]] | None = None
+
+_TRAIN_ROW_TARGET = 1000
+_TASK_COUNTS: dict[str, int] = {"train": 256, "test": 64}
+_TASK_SEED_OFFSETS: dict[str, int] = {"train": 0, "test": 10_000}
+
+_SOURCE_DEFAULTS: dict[str, dict[str, int | float | str]] = {
+    "symptom_reference": {
+        "age": 52,
+        "sex": "F",
+        "mental_state": "alert",
+        "sbp": 128,
+        "dbp": 78,
+        "hr": 86,
+        "rr": 18,
+        "temp_c": 36.8,
+        "spo2": 97,
+    },
+    "ed_triage": {
+        "age": 58,
+        "sex": "F",
+        "mental_state": "alert",
+        "sbp": 132,
+        "dbp": 78,
+        "hr": 90,
+        "rr": 19,
+        "temp_c": 37.0,
+        "spo2": 97,
+    },
+}
 
 
 def _load_rows() -> list[dict[str, str]]:
     """Read and cache all CSV rows. Called lazily on first access."""
     global _rows_cache
     if _rows_cache is None:
-        with DATASET_PATH.open(encoding="utf-8", errors="replace") as f:
-            reader = csv.DictReader(f, delimiter=";")
-            _rows_cache = list(reader)
+        if COMBINED_DATASET_PATH.exists():
+            with COMBINED_DATASET_PATH.open(encoding="utf-8", errors="replace") as f:
+                reader = csv.DictReader(f)
+                _rows_cache = list(reader)
+        else:
+            with LEGACY_DATASET_PATH.open(encoding="utf-8", errors="replace") as f:
+                reader = csv.DictReader(f, delimiter=";")
+                _rows_cache = list(reader)
     return _rows_cache
 
 
@@ -248,6 +387,74 @@ def _build_valid_indices() -> dict[KtasLevel, list[int]]:
     return _valid_indices_cache  # type: ignore[return-value]
 
 
+def _stable_sort(indices: list[int], salt: str) -> list[int]:
+    return sorted(
+        indices,
+        key=lambda idx: hashlib.sha256(f"{salt}|{idx}".encode()).hexdigest(),
+    )
+
+
+def _build_split_indices() -> dict[str, list[int]]:
+    global _split_indices_cache
+    if _split_indices_cache is not None:
+        return _split_indices_cache
+
+    valid = _build_valid_indices()
+    total = sum(len(indices) for indices in valid.values())
+    if total == 0:
+        _split_indices_cache = {"train": [], "test": []}
+        return _split_indices_cache
+
+    train_target = min(_TRAIN_ROW_TARGET, total)
+    allocated: dict[KtasLevel, int] = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0}
+    remainders: list[tuple[float, KtasLevel]] = []
+    assigned = 0
+
+    for level in (1, 2, 3, 4, 5):
+        level_total = len(valid[level])
+        if level_total == 0:
+            continue
+        exact = (level_total * train_target) / total
+        base = min(level_total, int(exact))
+        allocated[level] = base
+        assigned += base
+        remainders.append((exact - base, level))
+
+    remaining = train_target - assigned
+    for _, level in sorted(remainders, reverse=True):
+        if remaining <= 0:
+            break
+        if allocated[level] < len(valid[level]):
+            allocated[level] += 1
+            remaining -= 1
+
+    if remaining > 0:
+        for level in (1, 2, 3, 4, 5):
+            while remaining > 0 and allocated[level] < len(valid[level]):
+                allocated[level] += 1
+                remaining -= 1
+
+    train_indices: list[int] = []
+    test_indices: list[int] = []
+    for level in (1, 2, 3, 4, 5):
+        ordered = _stable_sort(valid[level], f"split|{level}")
+        cutoff = allocated[level]
+        train_indices.extend(ordered[:cutoff])
+        test_indices.extend(ordered[cutoff:])
+
+    _split_indices_cache = {
+        "train": sorted(train_indices),
+        "test": sorted(test_indices),
+    }
+    return _split_indices_cache
+
+
+def split_row_indices(split: str) -> list[int]:
+    if split not in ("train", "test"):
+        raise ValueError(f"unknown split {split!r}; expected 'train' or 'test'")
+    return list(_build_split_indices()[split])
+
+
 def load_row(row_index: int) -> Patient:
     """Load one CSV row as a Patient. Raises if the row is unusable."""
     rows = _load_rows()
@@ -259,7 +466,7 @@ def load_row(row_index: int) -> Patient:
     return patient
 
 
-def select_diverse_batch(seed: int, n: int = 5) -> list[int]:
+def select_diverse_batch(seed: int, n: int = 5, split: str | None = None) -> list[int]:
     """Return n CSV row indices with at least one KTAS 1-2 and at least one
     KTAS 4-5. Deterministic given seed.
 
@@ -267,10 +474,13 @@ def select_diverse_batch(seed: int, n: int = 5) -> list[int]:
     possible. Smaller n: prioritises severity diversity.
     """
     valid = _build_valid_indices()
-    rng_state = int(hashlib.sha256(f"diverse|{seed}|{n}".encode()).hexdigest()[:16], 16)
+    allowed = set(split_row_indices(split)) if split is not None else None
+    rng_state = int(
+        hashlib.sha256(f"diverse|{split or 'all'}|{seed}|{n}".encode()).hexdigest()[:16], 16
+    )
 
     def _pick(level: KtasLevel, taken: set[int]) -> int | None:
-        pool = [i for i in valid[level] if i not in taken]
+        pool = [i for i in valid[level] if i not in taken and (allowed is None or i in allowed)]
         if not pool:
             return None
         nonlocal rng_state
@@ -300,3 +510,32 @@ def select_diverse_batch(seed: int, n: int = 5) -> list[int]:
             continue
         break
     return chosen
+
+
+def list_task_specs(split: str, n: int = 5) -> list[dict[str, Any]]:
+    if split not in ("train", "test"):
+        raise ValueError(f"unknown split {split!r}; expected 'train' or 'test'")
+
+    task_count = _TASK_COUNTS[split]
+    seed_offset = _TASK_SEED_OFFSETS[split]
+    tasks: list[dict[str, Any]] = []
+
+    for task_index in range(task_count):
+        seed = seed_offset + task_index
+        row_indices = select_diverse_batch(seed=seed, n=n, split=split)
+        ground_truth = [load_row(i).ground_truth_ktas for i in row_indices]
+        tasks.append(
+            {
+                "id": f"{split}-batch-{task_index:04d}",
+                "name": f"{split.title()} Batch {task_index:04d}",
+                "row_indices": row_indices,
+                "ground_truth_ktas": ground_truth,
+                "max_turns": 50,
+                "shift_length_min": 60,
+                "seed": seed,
+                "n": n,
+                "split": split,
+            }
+        )
+
+    return tasks
