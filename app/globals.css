@@ -1,26 +1,206 @@
 @import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
 
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * Triage Lab — pastel green clinical palette.
+ * shadcn primitives consume the foundation tokens (background, card,
+ * primary, etc.). Domain tokens (decision-*, thinking-*, action-*) are layered
+ * on top for the triage-specific surfaces.
+ */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* ── Foundation surfaces ───────────────────────────── */
+  --background: #f8faf8;
+  --foreground: #0f172a;
+
+  --card: #ffffff;
+  --card-foreground: #0f172a;
+  --popover: #ffffff;
+  --popover-foreground: #0f172a;
+
+  --surface: #ffffff;
+  --surface-secondary: #f1f5f2;
+
+  /* ── Text scale ─────────────────────────────────────── */
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #94a3b8;
+
+  /* ── Primary accent (pastel green) ──────────────────── */
+  --primary: #86efac;
+  --primary-foreground: #14532d;
+
+  --secondary: #f1f5f2;
+  --secondary-foreground: #0f172a;
+  --muted: #f1f5f2;
+  --muted-foreground: #475569;
+  --accent: #86efac;
+  --accent-hover: #4ade80;
+  --accent-foreground: #14532d;
+
+  /* ── Decision (success/resolution) ──────────────────── */
+  --decision-bg: #ecfdf5;
+  --decision-border: #bbf7d0;
+  --decision-text: #14532d;
+
+  /* ── Thinking (internal reasoning) ──────────────────── */
+  --thinking-bg: #f1f5f2;
+  --thinking-border: #e2e8e5;
+  --thinking-text: #64748b;
+
+  /* ── States ─────────────────────────────────────────── */
+  --warning-bg: #fef9c3;
+  --warning-text: #854d0e;
+  --error-bg: #fee2e2;
+  --error-text: #991b1b;
+  --destructive: #dc2626;
+
+  /* ── Borders & inputs ───────────────────────────────── */
+  --border: #e2e8e5;
+  --border-strong: #cbd5d1;
+  --input: #e2e8e5;
+  --ring: #86efac;
+
+  --radius: 1rem;
 }
 
 @theme inline {
+  /* Foundation tokens consumed by shadcn primitives */
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  /* Domain tokens for triage surfaces */
+  --color-surface: var(--surface);
+  --color-surface-secondary: var(--surface-secondary);
+  --color-subtle: var(--text-muted);
+  --color-decision-bg: var(--decision-bg);
+  --color-decision-border: var(--decision-border);
+  --color-decision-text: var(--decision-text);
+  --color-thinking-bg: var(--thinking-bg);
+  --color-thinking-border: var(--thinking-border);
+  --color-thinking-text: var(--thinking-text);
+  --color-warning-bg: var(--warning-bg);
+  --color-warning-text: var(--warning-text);
+  --color-error-bg: var(--error-bg);
+  --color-error-text: var(--error-text);
+
+  /* Sans for UI chrome (clinical, readable); serif for the "voice" surfaces — Claude-style */
+  --font-sans: "Inter", "Inter Fallback", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Source Serif 4", "Source Serif 4 Fallback", "Source Serif Pro",
+    "Iowan Old Style", "Apple Garamond", Cambria, Georgia, serif;
+  --font-heading: var(--font-serif);
+
+  --radius-sm: calc(var(--radius) * 0.4);
+  --radius-md: calc(var(--radius) * 0.6);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.25);
+  --radius-2xl: calc(var(--radius) * 1.5);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
+html,
 body {
   background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  color: var(--text-primary);
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── Scrollbars ───────────────────────────────────── */
+.scroll-area::-webkit-scrollbar {
+  width: 8px;
+}
+.scroll-area::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 4px;
+}
+.scroll-area::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ── Animations ───────────────────────────────────── */
+/*
+ * Travelling-wave loader. Each dot rises and falls in sequence; the cycle is
+ * long enough that there is a gentle pause between waves rather than a
+ * continuous bounce, which reads as "settling" rather than "frantic".
+ */
+@keyframes triage-wave {
+  0%,
+  60%,
+  100% {
+    opacity: 0.3;
+    transform: translateY(0) scale(0.85);
+  }
+  20% {
+    opacity: 1;
+    transform: translateY(-6px) scale(1.1);
+  }
+  40% {
+    opacity: 0.6;
+    transform: translateY(-2px) scale(1);
+  }
+}
+.dot-pulse {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 4px;
+  height: 14px;
+}
+.dot-pulse > span {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  border-radius: 9999px;
+  background: var(--thinking-text);
+  animation: triage-wave 1.4s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+}
+.dot-pulse > span:nth-child(2) {
+  animation-delay: 0.18s;
+}
+.dot-pulse > span:nth-child(3) {
+  animation-delay: 0.36s;
+}
+
+@keyframes fade-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.fade-rise {
+  animation: fade-rise 0.35s ease-out both;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  html {
+    @apply font-sans;
+  }
 }
