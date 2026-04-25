@@ -464,7 +464,7 @@ export default function TriageLabPage() {
 
       const scenario =
         request.mode === "test"
-          ? `Test batch ${request.taskId} (${request.batchSize} patient${request.batchSize === 1 ? "" : "s"})${request.extraPatient ? ` + intake-note patient: \"${request.extraPatient}\"` : ""}`
+          ? `Test batch ${request.taskId} (${request.batchSize} patient${request.batchSize === 1 ? "" : "s"})${request.savedResponses ? " - saved response" : ""}${request.extraPatient ? ` + intake-note patient: \"${request.extraPatient}\"` : ""}`
           : request.mode === "manual-single"
             ? request.patient.chiefComplaint
             : request.patients.map((p, i) => `${i + 1}. ${p.chiefComplaint}`).join("\n");

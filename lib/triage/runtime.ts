@@ -86,6 +86,24 @@ type IntakeAssessment = {
   actions: Action[];
 };
 
+type PerPatientAssignment = {
+  patient_id: string;
+  agent_level: number;
+  truth_level: number | null;
+  reward: number | null;
+  order: number;
+  scored: boolean;
+  source: "dataset" | "manual";
+  chief_complaint: string;
+};
+
+type SavedResponsePatient = {
+  id: string;
+  chiefComplaint: string;
+  truthLevel: number | null;
+  source: "dataset" | "manual";
+};
+
 export type EpisodeData = {
   id: string;
   result: Record<string, unknown> | null;
@@ -586,6 +604,177 @@ function sentence(text: string): string {
   return /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`;
 }
 
+function ktasTool(level: number): string {
+  if (level === 1) return "assign_immediate";
+  if (level === 2) return "assign_very_urgent";
+  if (level === 3) return "assign_urgent";
+  if (level === 4) return "assign_standard";
+  return "assign_not_urgent";
+}
+
+function ktasFromSeverity(severity: Severity): number {
+  if (severity === "critical") return 1;
+  if (severity === "high") return 2;
+  if (severity === "moderate") return 3;
+  return 4;
+}
+
+function assignmentReward(agentLevel: number, truthLevel: number): number {
+  const gap = Math.abs(agentLevel - truthLevel);
+  const base = Math.max(0, 1 - 0.4 * gap);
+  return agentLevel > truthLevel ? base * 0.5 : base;
+}
+
+function clamp01(value: number): number {
+  return Math.max(0, Math.min(1, value));
+}
+
+function writeJsonlFile(filePath: string, records: Array<Record<string, unknown>>) {
+  fs.writeFileSync(filePath, records.map((record) => JSON.stringify(record)).join("\n"));
+}
+
+function safeEpisodePart(value: string): string {
+  return (
+    value
+      .trim()
+      .replace(/[^a-z0-9-]+/gi, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 80) || "batch"
+  ).toLowerCase();
+}
+
+function orderingBonus(assignments: PerPatientAssignment[]): number {
+  const scored = assignments.filter((assignment) => assignment.truth_level != null);
+  if (scored.length === 0) return 0;
+
+  const truths = scored.map((assignment) => assignment.truth_level as number);
+  if (new Set(truths).size === 1) return 0;
+
+  const firstScored = scored.reduce((best, assignment) =>
+    assignment.order < best.order ? assignment : best,
+  );
+  if (firstScored.truth_level === Math.min(...truths)) return 0.1;
+  if (firstScored.truth_level === Math.max(...truths)) return -0.1;
+  return 0;
+}
+
+function scoreAssignments(assignments: PerPatientAssignment[]): {
+  baseReward: number | null;
+  orderingBonus: number;
+  compositeScore: number | null;
+} {
+  const scored = assignments.filter(
+    (assignment) => assignment.scored && assignment.reward != null,
+  );
+  const bonus = orderingBonus(assignments);
+  if (scored.length === 0) {
+    return { baseReward: null, orderingBonus: bonus, compositeScore: null };
+  }
+
+  const baseReward =
+    scored.reduce((sum, assignment) => sum + Number(assignment.reward), 0) /
+    scored.length;
+  return {
+    baseReward,
+    orderingBonus: bonus,
+    compositeScore: clamp01(baseReward + bonus),
+  };
+}
+
+function evaluationSummary(assignments: PerPatientAssignment[]): Record<string, unknown> | null {
+  const scored = assignments.filter(
+    (assignment) => assignment.scored && assignment.truth_level != null,
+  );
+  if (scored.length === 0) return null;
+
+  const confusion: Record<string, Record<string, number>> = {
+    "1": {},
+    "2": {},
+    "3": {},
+    "4": {},
+    "5": {},
+  };
+  for (const assignment of scored) {
+    const agent = String(assignment.agent_level);
+    const truth = String(assignment.truth_level);
+    confusion[agent][truth] = (confusion[agent][truth] ?? 0) + 1;
+  }
+
+  const exactMatches = scored.filter(
+    (assignment) => assignment.agent_level === assignment.truth_level,
+  ).length;
+  const overTriage = scored.filter(
+    (assignment) =>
+      assignment.truth_level != null && assignment.agent_level < assignment.truth_level,
+  ).length;
+  const underTriage = scored.filter(
+    (assignment) =>
+      assignment.truth_level != null && assignment.agent_level > assignment.truth_level,
+  ).length;
+  const offByOne = scored.filter(
+    (assignment) =>
+      assignment.truth_level != null &&
+      Math.abs(assignment.agent_level - assignment.truth_level) === 1,
+  ).length;
+
+  return {
+    scored_count: scored.length,
+    exact_matches: exactMatches,
+    over_triage: overTriage,
+    under_triage: underTriage,
+    exact_rate: exactMatches / scored.length,
+    mistriage_rate: 1 - exactMatches / scored.length,
+    under_triage_rate: underTriage / scored.length,
+    off_by_one_count: offByOne,
+    off_by_two_or_more_count: scored.length - exactMatches - offByOne,
+    confusion,
+  };
+}
+
+function savedResponsePatientLevel(patient: SavedResponsePatient): number {
+  if (patient.truthLevel != null) return patient.truthLevel;
+  return ktasFromSeverity(extractAssessment([patient.chiefComplaint]).severity);
+}
+
+function savedResponseFinalText(
+  assignments: PerPatientAssignment[],
+  score: ReturnType<typeof scoreAssignments>,
+): string {
+  const scoredCount = assignments.filter((assignment) => assignment.scored).length;
+  const manualCount = assignments.length - scoredCount;
+  const lines = [`All ${assignments.length} patients assigned from saved responses.`];
+
+  if (score.compositeScore != null && score.baseReward != null) {
+    lines.push(`Composite: ${score.compositeScore.toFixed(3)}`);
+    lines.push(`  Base (mean over scored): ${score.baseReward.toFixed(3)}`);
+    lines.push(`  Ordering bonus: ${score.orderingBonus.toFixed(2)}`);
+  } else {
+    lines.push("Composite: (none — pure-manual run, no ground truth)");
+  }
+
+  lines.push("");
+  lines.push(`Scored: ${scoredCount} | Manual / unscored: ${manualCount}`);
+  for (const assignment of assignments) {
+    if (assignment.truth_level == null) {
+      lines.push(
+        `  ${assignment.patient_id}: agent KTAS ${assignment.agent_level} (unscored — no truth)`,
+      );
+    } else {
+      const tag =
+        assignment.agent_level === assignment.truth_level
+          ? "match"
+          : assignment.agent_level < assignment.truth_level
+            ? "over"
+            : "UNDER";
+      lines.push(
+        `  ${assignment.patient_id}: agent KTAS ${assignment.agent_level} vs truth ${assignment.truth_level} (${tag}, reward ${assignment.reward?.toFixed(2) ?? "n/a"})`,
+      );
+    }
+  }
+
+  return lines.join("\n");
+}
+
 function buildIntakeThinking(
   history: string[],
   matchedCase: IntakeSuggestion | null,
@@ -966,6 +1155,159 @@ export function previewBatch(
   return patients;
 }
 
+function createSavedResponseEpisode(
+  request: Extract<RunRequest, { mode: "test" }>,
+): { episodeId: string } {
+  const previewPatients = previewBatch(request.taskId, request.batchSize);
+  const patients: SavedResponsePatient[] = previewPatients.map((patient) => ({
+    id: patient.id,
+    chiefComplaint: patient.chief_complaint,
+    truthLevel: patient.ground_truth_ktas,
+    source: "dataset",
+  }));
+
+  const extraPatient = request.extraPatient?.trim();
+  if (extraPatient) {
+    patients.push({
+      id: `manual-${patients.filter((patient) => patient.source === "manual").length}`,
+      chiefComplaint: extraPatient,
+      truthLevel: null,
+      source: "manual",
+    });
+  }
+
+  if (patients.length === 0) {
+    throw new Error("saved responses require at least one preview patient");
+  }
+
+  const orderedPatients = patients
+    .map((patient, index) => ({ patient, index }))
+    .sort((a, b) => {
+      const acuityA = a.patient.truthLevel ?? 6;
+      const acuityB = b.patient.truthLevel ?? 6;
+      return acuityA - acuityB || a.index - b.index;
+    })
+    .map(({ patient }) => patient);
+
+  const assignments = orderedPatients.map((patient, index) => {
+    const agentLevel = savedResponsePatientLevel(patient);
+    const reward =
+      patient.truthLevel == null ? null : assignmentReward(agentLevel, patient.truthLevel);
+    return {
+      patient_id: patient.id,
+      agent_level: agentLevel,
+      truth_level: patient.truthLevel,
+      reward,
+      order: index + 1,
+      scored: patient.truthLevel != null,
+      source: patient.source,
+      chief_complaint: patient.chiefComplaint,
+    } satisfies PerPatientAssignment;
+  });
+
+  const score = scoreAssignments(assignments);
+  const now = Date.now();
+  const startedAt = new Date(now).toISOString();
+  const endedAt = new Date(now + Math.max(1, assignments.length) * 250).toISOString();
+  const taskId = `${request.taskId}-n${request.batchSize}${extraPatient ? "-extra" : ""}-saved`;
+  const episodeId = `saved-${safeEpisodePart(taskId)}-${now.toString(36)}`;
+
+  const trajectory: Array<Record<string, unknown>> = [
+    {
+      turn: 1,
+      kind: "tool_result",
+      tool: "load_saved_response",
+      text: `Loaded ${patients.length} patient${patients.length === 1 ? "" : "s"} from a saved demo response for ${request.taskId}.`,
+      reward: 0,
+      finished: false,
+      ts: startedAt,
+    },
+    {
+      turn: 2,
+      kind: "tool_result",
+      tool: "prioritise_queue",
+      text: "Sorted patients by highest acuity first, matching the live triage environment scoring rule.",
+      reward: 0,
+      finished: false,
+      ts: new Date(now + 100).toISOString(),
+    },
+    ...assignments.map((assignment, index) => {
+      const isLast = index === assignments.length - 1;
+      const remaining = assignments.length - index - 1;
+      return {
+        turn: index + 3,
+        kind: "tool_result",
+        tool: ktasTool(assignment.agent_level),
+        text: isLast
+          ? savedResponseFinalText(assignments, score)
+          : `Assigned ${assignment.patient_id} -> KTAS ${assignment.agent_level} (${KTAS_NAMES[assignment.agent_level]}). ${remaining} patient${remaining === 1 ? "" : "s"} remaining.${assignment.scored ? "" : " (unscored — manual entry)"}`,
+        reward: isLast ? (score.compositeScore ?? 0) : (assignment.reward ?? 0),
+        finished: isLast,
+        ts: new Date(now + (index + 2) * 250).toISOString(),
+      } satisfies Record<string, unknown>;
+    }),
+  ];
+
+  let cumulative = 0;
+  const rewards = trajectory
+    .filter((event) => typeof event.reward === "number")
+    .map((event) => {
+      const reward = Number(event.reward);
+      cumulative += reward;
+      return {
+        turn: event.turn,
+        tool: event.tool,
+        reward,
+        cumulative,
+      };
+    });
+  const scoredCount = assignments.filter((assignment) => assignment.scored).length;
+  const manualCount = assignments.length - scoredCount;
+  const result = {
+    episode_id: episodeId,
+    task_id: taskId,
+    model: "saved-responses-demo",
+    turns: trajectory.length,
+    finished: true,
+    status: "complete",
+    total_reward: cumulative,
+    composite_score: score.compositeScore,
+    score: score.compositeScore ?? 0,
+    summary: `Saved demo response classified ${assignments.length} patient${assignments.length === 1 ? "" : "s"} instantly.`,
+    operator_note: "Saved responses enabled; skipped the live LLM and OpenReward server loop for demo use.",
+    cost_usd: 0,
+    cost_gbp: 0,
+    calls: 0,
+    by_model: {},
+    started_at: startedAt,
+    ended_at: endedAt,
+    max_turns: assignments.length,
+    scored_count: scoredCount,
+    manual_count: manualCount,
+    per_patient_assignments: assignments,
+    evaluation_summary: evaluationSummary(assignments),
+    saved_response: true,
+  } satisfies Record<string, unknown>;
+  const meta = {
+    mode: "saved-responses",
+    request: {
+      taskId: request.taskId,
+      batchSize: request.batchSize,
+      extraPatient: extraPatient ?? null,
+    },
+    generated_at: startedAt,
+  } satisfies Record<string, unknown>;
+
+  const dir = path.join(RUNS_DIR, episodeId);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "result.json"), JSON.stringify(result, null, 2));
+  fs.writeFileSync(path.join(dir, "meta.json"), JSON.stringify(meta, null, 2));
+  writeJsonlFile(path.join(dir, "trajectory.jsonl"), trajectory);
+  writeJsonlFile(path.join(dir, "rewards.jsonl"), rewards);
+
+  return { episodeId };
+}
+
 function manualPatientToPython(p: ManualPatient): Record<string, unknown> {
   // The Python `synthesize_manual_patient` reads snake_case fields. Map TS
   // camelCase ↔ Python snake_case here.
@@ -1061,6 +1403,10 @@ function writeTempSpec(spec: Record<string, unknown>): string {
 export async function runLiveEpisode(
   request: RunRequest,
 ): Promise<{ episodeId: string }> {
+  if (request.mode === "test" && request.savedResponses) {
+    return createSavedResponseEpisode(request);
+  }
+
   await ensureEnvServer();
   configuredAgentModel();
 

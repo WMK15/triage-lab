@@ -132,6 +132,7 @@ export type RunRequest =
       taskId: string;
       batchSize: number;
       extraPatient?: string; // Option C: optional intake-note patient (unscored)
+      savedResponses?: boolean;
     }
   | {
       mode: "manual-single";

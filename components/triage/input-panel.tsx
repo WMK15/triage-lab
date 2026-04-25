@@ -57,6 +57,7 @@ export function InputPanel({
   const [batchSize, setBatchSize] = useState<number>(5);
   const [extraOn, setExtraOn] = useState(false);
   const [extraText, setExtraText] = useState("");
+  const [savedResponses, setSavedResponses] = useState(false);
 
   const [singlePatient, setSinglePatient] = useState<ManualPatient>(
     emptyManualPatient(),
@@ -114,6 +115,7 @@ export function InputPanel({
         batchSize,
         extraPatient:
           extraOn && extraText.trim().length > 0 ? extraText.trim() : undefined,
+        savedResponses,
       };
     } else if (mode === "manual-single") {
       request = { mode: "manual-single", patient: singlePatient };
@@ -289,6 +291,23 @@ export function InputPanel({
             {taskId ? <BatchPreview taskId={taskId} batchSize={batchSize} /> : null}
 
             <div className="rounded-xl border border-border bg-[var(--surface-secondary)]/30 p-3">
+              <label className="flex items-start gap-2 text-[13px] text-[var(--text-secondary)]">
+                <input
+                  type="checkbox"
+                  checked={savedResponses}
+                  onChange={(e) => setSavedResponses(e.target.checked)}
+                  className="mt-0.5 h-4 w-4 accent-[var(--accent)]"
+                />
+                <span>
+                  <span className="font-medium text-foreground">Saved responses</span>
+                  <span className="block text-[12px] text-[var(--text-muted)]">
+                    Instant demo mode: skips the live LLM run and replays a deterministic triage result.
+                  </span>
+                </span>
+              </label>
+            </div>
+
+            <div className="rounded-xl border border-border bg-[var(--surface-secondary)]/30 p-3">
               <label className="flex items-center gap-2 text-[13px] text-[var(--text-secondary)]">
                 <input
                   type="checkbox"
@@ -364,7 +383,9 @@ export function InputPanel({
               {isRunning
                 ? "Running..."
                 : mode === "test"
-                  ? `Run batch (${batchSize}${extraOn && extraText.trim() ? "+1" : ""} patients)`
+                  ? savedResponses
+                    ? `Show saved response (${batchSize}${extraOn && extraText.trim() ? "+1" : ""} patients)`
+                    : `Run batch (${batchSize}${extraOn && extraText.trim() ? "+1" : ""} patients)`
                   : mode === "manual-single"
                     ? "Run single classification"
                     : `Run ${

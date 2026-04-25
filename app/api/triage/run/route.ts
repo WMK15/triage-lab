@@ -6,6 +6,7 @@ type LooseRunBody = {
   taskId?: string;
   batchSize?: number;
   extraPatient?: string;
+  savedResponses?: boolean;
   note?: string;
   patient?: ManualPatient;
   patients?: ManualPatient[];
@@ -54,6 +55,7 @@ export async function POST(request: Request) {
       taskId,
       batchSize,
       extraPatient: body.extraPatient ?? body.note,
+      savedResponses: body.savedResponses === true,
     };
   } else {
     return Response.json(
