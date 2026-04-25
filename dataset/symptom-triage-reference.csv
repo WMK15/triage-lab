@@ -1,0 +1,104 @@
+symptom_name,body_system,symptom_type,typical_triage_level,high_acuity_modifier,low_acuity_modifier,must_rule_out,severity_descriptor,onset_pattern,frequency_in_level_1,frequency_in_level_2,frequency_in_level_3,frequency_in_level_4,frequency_in_level_5,confidence_score
+Cardiac arrest,Cardiovascular,vital sign absence,1,Yes,No,"Cardiac event, arrhythmia",life-threatening,sudden,0.99,0.01,0,0,0,1.0
+Respiratory arrest,Respiratory,vital sign absence,1,Yes,No,"Respiratory failure, airway obstruction",critical,sudden,0.99,0.01,0,0,0,1.0
+Unresponsiveness (GCS 3-8),Neurological,consciousness,1,Yes,No,"Stroke, TBI, sepsis, intoxication",life-threatening,varied,0.95,0.04,0.01,0,0,0.99
+Severe respiratory distress with cyanosis,Respiratory,breathing effort,1,Yes,No,"Anaphylaxis, pneumothorax, PE, severe asthma",critical,sudden,0.92,0.07,0.01,0,0,0.99
+SpO2 <88%,Respiratory,oxygenation,1,Yes,No,"Respiratory failure, PE, pneumothorax",critical,sudden,0.90,0.08,0.02,0,0,0.98
+Severe hemorrhage (uncontrolled),Cardiovascular,bleeding,1,Yes,No,"Massive GI bleed, trauma, ruptured AAA",life-threatening,sudden,0.95,0.04,0.01,0,0,1.0
+Shock (hypotension + altered mental + poor perfusion),Cardiovascular,hemodynamic,1,Yes,No,"Septic shock, cardiogenic shock, hemorrhagic shock",critical,sudden,0.92,0.07,0.01,0,0,0.99
+Loss of consciousness,Neurological,consciousness,1,Yes,No,"TBI, stroke, arrhythmia, severe intoxication",life-threatening,sudden,0.88,0.10,0.02,0,0,0.98
+Stridor (acute),Respiratory,airway,1,Yes,No,"Epiglottitis, anaphylaxis, foreign body, croup severe",critical,sudden,0.85,0.13,0.02,0,0,0.97
+Thunderclap headache,Neurological,headache,1,Yes,No,"Subarachnoid hemorrhage, ICH",life-threatening,sudden,0.90,0.08,0.02,0,0,0.99
+Acute severe chest pain + diaphoresis + dyspnea,Cardiovascular,chest pain,2,Yes,No,"ACS, PE, aortic dissection, pericarditis",severe,sudden,0.05,0.85,0.09,0.01,0,0.98
+Acute altered mental status,Neurological,consciousness,2,Yes,No,"Sepsis, stroke, hypoglycemia, intoxication, TBI",emergency,sudden,0.02,0.85,0.12,0.01,0,0.97
+Sudden focal neurological deficit (weakness/speech/vision),Neurological,focal deficit,2,Yes,No,"Acute ischemic stroke, ICH",emergency,sudden,0.03,0.82,0.14,0.01,0,0.96
+Syncope with cardiac risk,Cardiovascular,syncope,2,Yes,No,"Arrhythmia, structural heart disease, PE",emergency,sudden,0.08,0.75,0.15,0.02,0,0.94
+Fever + non-blanching petechial rash,Infection,rash,1,Yes,No,"Meningococcal sepsis, meningitis",life-threatening,rapid,0.88,0.10,0.02,0,0,0.98
+Fever + neck stiffness + headache,Infection,fever with signs,2,Yes,No,"Meningitis, meningococcal sepsis",emergency,rapid,0.05,0.80,0.14,0.01,0,0.96
+Hematemesis (vomiting blood),GI/Abdominal,bleeding,2,Yes,No,"Upper GI bleed, varices",emergency,sudden,0.08,0.78,0.12,0.02,0,0.95
+Severe dyspnea at rest,Respiratory,dyspnea,2,Yes,No,"PE, pneumothorax, anaphylaxis, severe asthma, ACS",emergency,sudden,0.10,0.75,0.13,0.02,0,0.94
+Fever + altered mental status + tachycardia + tachypnea,Infection,sepsis signs,2,Yes,No,"Sepsis, severe infection",emergency,rapid,0.07,0.80,0.12,0.01,0,0.96
+Acute severe abdominal pain + hypotension,GI/Abdominal,abd pain,2,Yes,No,"AAA, ruptured ectopic, perforated viscus, hemorrhage",emergency,sudden,0.10,0.75,0.13,0.02,0,0.94
+Chest pain + radiation to arm/jaw/back,Cardiovascular,chest pain,2,Yes,No,"ACS, aortic dissection",emergency,sudden,0.08,0.78,0.12,0.02,0,0.95
+GCS 9-13,Neurological,consciousness,2,Yes,No,"Moderate head injury, altered mental status",emergency,varied,0.05,0.80,0.13,0.02,0,0.94
+New severe headache (age >50),Neurological,headache,2,Yes,No,"Temporal arteritis, malignancy, hypertensive emergency, intracranial pathology",emergency,sudden,0.08,0.75,0.15,0.02,0,0.93
+Syncope (general),Cardiovascular,syncope,2,Yes,No,"Arrhythmia, structural heart disease, stroke",emergency,sudden,0.06,0.78,0.14,0.02,0,0.94
+Palpitations + chest pain + dyspnea,Cardiovascular,palpitations,2,Yes,No,"Arrhythmia with hemodynamic instability",emergency,sudden,0.08,0.75,0.15,0.02,0,0.93
+Abdominal pain radiating to back,GI/Abdominal,abd pain,2,Yes,No,"AAA, pancreatitis, kidney stone",emergency,sudden,0.10,0.73,0.15,0.02,0,0.93
+Severe localized abdominal pain (RUQ/RLQ/epigastrium),GI/Abdominal,abd pain,2,Yes,No,"Appendicitis, cholecystitis, acute MI, ectopic",emergency,acute,0.08,0.76,0.14,0.02,0,0.94
+Unequal pupils,Neurological,pupils,1,Yes,No,"Intracranial emergency, epidural hematoma, increased ICP",life-threatening,sudden,0.85,0.12,0.03,0,0,0.97
+Facial droop (acute),Neurological,facial,2,Yes,No,"Acute stroke",emergency,sudden,0.05,0.82,0.12,0.01,0,0.96
+Arm weakness (acute asymmetric),Neurological,weakness,2,Yes,No,"Acute stroke, spinal cord compression",emergency,sudden,0.06,0.80,0.13,0.01,0,0.96
+Speech difficulty (acute),Neurological,speech,2,Yes,No,"Acute stroke, intracranial pathology",emergency,sudden,0.05,0.82,0.12,0.01,0,0.96
+Vision loss (acute),Neurological,vision,2,Yes,No,"Retinal artery occlusion, stroke, retinal emergency",emergency,sudden,0.06,0.78,0.14,0.02,0,0.94
+Severe headache + neck stiffness + fever,Neurological,headache with signs,2,Yes,No,"Meningitis, intracranial infection",emergency,acute,0.08,0.78,0.12,0.02,0,0.95
+Severe pain radiating (any location),Neurological,pain radiating,2,Yes,No,"Organ-specific emergency",emergency,acute,0.06,0.76,0.16,0.02,0,0.93
+Acute severe abd pain (worst ever),GI/Abdominal,abd pain,2,Yes,No,"AAA, appendicitis, perforated viscus, ectopic rupture",emergency,sudden,0.12,0.74,0.12,0.02,0,0.93
+Drowning/near drowning (any),Respiratory,aspiration,1,Yes,No,"Aspiration, pulmonary edema, respiratory failure",critical,sudden,0.92,0.07,0.01,0,0,0.98
+Choking/airway obstruction,Respiratory,airway,1,Yes,No,"Complete airway obstruction, death",life-threatening,sudden,0.90,0.08,0.02,0,0,0.98
+Open penetrating wound (head/neck/trunk),Trauma,wound,1,Yes,No,"Vital organ injury, hemorrhage",critical,sudden,0.88,0.10,0.02,0,0,0.97
+Clear fluid from nose/ear,Trauma,CSF,2,Yes,No,"Basilar skull fracture, intracranial injury",emergency,acute,0.08,0.77,0.13,0.02,0,0.94
+Fever alone in well-appearing patient,Infection,fever,4,No,Yes,"Viral URI, benign infection",mild,gradual,0.01,0.02,0.15,0.45,0.37,0.80
+Cough + sore throat (mild),Respiratory,cough,5,No,Yes,"URI, pharyngitis",minimal,gradual,0,0.01,0.08,0.25,0.66,0.85
+Minor laceration/abrasion,Trauma,wound,4,No,Yes,"Minor injury, no serious pathology",minimal,acute,0,0,0.02,0.45,0.53,0.88
+Chronic stable back pain,GI/Abdominal,pain,4,No,Yes,"Musculoskeletal pain",mild,chronic,0,0,0.05,0.50,0.45,0.85
+Mild dizziness (isolated, no neuro signs),Neurological,dizziness,4,No,Yes,"Benign, deconditioning",mild,gradual,0,0,0.10,0.55,0.35,0.82
+Moderate dyspnea on exertion,Respiratory,dyspnea,3,No,Yes,"Asthma, deconditioning, mild CHF",moderate,gradual,0,0.05,0.45,0.35,0.15,0.85
+Moderate abdominal pain (stable vitals),GI/Abdominal,abd pain,3,No,Yes,"Gastroenteritis, mild inflammation",moderate,acute,0,0.08,0.52,0.30,0.10,0.82
+Fever + cough + mild dyspnea,Respiratory,fever with cough,3,No,No,"Pneumonia, bronchitis",moderate,acute,0.02,0.18,0.52,0.22,0.06,0.85
+New onset headache (no red flags),Neurological,headache,3,No,No,"Tension headache, migraine, viral",moderate,acute,0,0.10,0.55,0.30,0.05,0.80
+Palpitations (mild, stable vitals),Cardiovascular,palpitations,3,No,No,"Benign arrhythmia, anxiety, caffeine",moderate,acute,0,0.05,0.48,0.40,0.07,0.78
+Moderate pain 7-8/10 (stable vitals),GI/Abdominal,pain,3,No,No,"Organ-specific but stable",moderate,acute,0.02,0.20,0.55,0.20,0.03,0.80
+Vomiting (mild, able to tolerate fluids),GI/Abdominal,vomiting,3,No,Yes,"Gastroenteritis, minor cause",mild-moderate,acute,0.01,0.08,0.45,0.35,0.11,0.82
+Diarrhea (without blood/fever),GI/Abdominal,diarrhea,4,No,Yes,"Gastroenteritis, dietary",mild,acute,0,0.02,0.20,0.50,0.28,0.85
+Sore throat (mild),Respiratory,throat,5,No,Yes,"Pharyngitis, viral",minimal,acute,0,0,0.05,0.30,0.65,0.88
+Mild rash (no fever),Dermatology,rash,4,No,Yes,"Contact dermatitis, minor skin condition",mild,gradual,0,0,0.05,0.50,0.45,0.87
+Fatigue/weakness,Neurological,weakness,3,No,No,"Viral illness, anemia, metabolic",moderate,gradual,0.05,0.25,0.55,0.12,0.03,0.80
+Anxiety/panic attack,Psychiatric,psychiatric,3,No,No,"Anxiety, panic, medical mimic",moderate,acute,0,0.10,0.50,0.35,0.05,0.78
+Mild joint pain,Musculoskeletal,pain,4,No,Yes,"Musculoskeletal injury, arthritis",mild,acute,0,0,0.05,0.55,0.40,0.88
+Prescription refill request,Administrative,administrative,5,No,Yes,"Routine medication refill",minimal,N/A,0,0,0,0.10,0.90,0.95
+Chest pain radiating to jaw/arm,Cardiovascular,chest pain,2,Yes,No,"ACS, aortic dissection",severe,sudden,0.08,0.78,0.12,0.02,0,0.95
+Chest pain + diaphoresis + nausea,Cardiovascular,chest pain,2,Yes,No,"ACS",severe,sudden,0.12,0.80,0.06,0.02,0,0.97
+Severe dyspnea + unable to speak full sentences,Respiratory,dyspnea,2,Yes,No,"Severe asthma, PE, respiratory failure",severe,acute,0.10,0.78,0.10,0.02,0,0.95
+Wheezing (acute onset),Respiratory,wheezing,2,Yes,No,"Asthma exacerbation, anaphylaxis",emergency,sudden,0.08,0.75,0.15,0.02,0,0.93
+Severe abdominal pain + vomiting + guarding,GI/Abdominal,abd pain with signs,2,Yes,No,"Acute abdomen, peritonitis, obstruction",emergency,acute,0.10,0.75,0.13,0.02,0,0.94
+Right upper quadrant pain + fever,GI/Abdominal,abd pain,2,Yes,No,"Cholecystitis, cholangitis",emergency,acute,0.05,0.72,0.20,0.03,0,0.91
+Right lower quadrant pain (acute onset),GI/Abdominal,abd pain,2,Yes,No,"Appendicitis",emergency,acute,0.06,0.70,0.22,0.02,0,0.90
+Epigastric pain radiating to shoulder,GI/Abdominal,abd pain,2,Yes,No,"Splenic rupture, AAA, acute MI",emergency,acute,0.08,0.75,0.15,0.02,0,0.93
+Hemoptysis (coughing up blood),Respiratory,hemoptysis,2,Yes,No,"PE, tuberculosis, malignancy, pneumonia",emergency,acute,0.08,0.76,0.14,0.02,0,0.94
+Seizure (active or post-ictal),Neurological,seizure,2,Yes,No,"Epilepsy, hypoglycemia, infection, head injury",emergency,sudden,0.15,0.72,0.10,0.03,0,0.93
+Suicidal ideation with plan,Psychiatric,psychiatric,2,Yes,No,"Suicide attempt, self-harm",emergency,acute,0.90,0.08,0.02,0,0,0.99
+Homicidal ideation,Psychiatric,psychiatric,2,Yes,No,"Danger to others, violence",emergency,acute,0.92,0.07,0.01,0,0,0.99
+Acute behavior change,Psychiatric,psychiatric,2,Yes,No,"Delirium, intoxication, medical emergency",emergency,sudden,0.10,0.75,0.13,0.02,0,0.94
+Severe agitation,Psychiatric,psychiatric,2,Yes,No,"Agitation from medical/psychiatric cause",emergency,acute,0.12,0.74,0.12,0.02,0,0.93
+Hallucinations + confusion,Psychiatric,psychiatric,2,Yes,No,"Psychosis, delirium, intoxication",emergency,acute,0.08,0.77,0.13,0.02,0,0.94
+Cough with hemoptysis,Respiratory,cough,2,Yes,No,"PE, TB, pneumonia, malignancy",emergency,acute,0.06,0.78,0.14,0.02,0,0.94
+Shortness of breath + chest pain,Cardiovascular,dyspnea,2,Yes,No,"ACS, PE, pneumothorax, pericarditis",emergency,sudden,0.10,0.76,0.12,0.02,0,0.94
+Tachypnea >30 breaths/min,Respiratory,respiratory rate,2,Yes,No,"Respiratory distress, shock, severe infection",emergency,acute,0.12,0.75,0.11,0.02,0,0.94
+HR <40 or >150 bpm,Cardiovascular,heart rate,2,Yes,No,"Bradycardia/tachycardia from serious cause",emergency,acute,0.10,0.76,0.12,0.02,0,0.94
+SBP <90 mmHg (hypotension),Cardiovascular,blood pressure,1,Yes,No,"Shock, hemorrhage, severe infection",critical,sudden,0.88,0.10,0.02,0,0,0.97
+Acute severe hypertension (SBP >200),Cardiovascular,blood pressure,2,Yes,No,"Hypertensive emergency, stroke risk",emergency,acute,0.05,0.78,0.15,0.02,0,0.93
+Temperature >40°C,Infection,fever,2,Yes,No,"Severe infection, sepsis, heat stroke",emergency,acute,0.08,0.75,0.15,0.02,0,0.93
+Temperature <36°C (hypothermia),Infection,fever,2,Yes,No,"Severe hypothermia, sepsis, critical illness",emergency,acute,0.10,0.75,0.13,0.02,0,0.94
+Fever + hypotension,Infection,sepsis,2,Yes,No,"Septic shock, severe infection",emergency,rapid,0.12,0.78,0.08,0.02,0,0.95
+Fever + chills,Infection,fever,2,Yes,No,"Bacteremia, serious infection",emergency,acute,0.08,0.76,0.14,0.02,0,0.94
+Fever in immunocompromised patient,Infection,fever,2,Yes,No,"Serious infection, sepsis, opportunistic infection",emergency,acute,0.15,0.72,0.10,0.03,0,0.93
+Fever >38.3°C + localized severe pain,Infection,fever,2,Yes,No,"Localized infection (pyelonephritis, abscess)",emergency,acute,0.08,0.76,0.14,0.02,0,0.94
+Fever + petechial rash,Infection,rash,1,Yes,No,"Meningococcal disease, meningitis",critical,rapid,0.92,0.06,0.02,0,0,0.98
+Fever + altered mental + signs of infection,Infection,sepsis,2,Yes,No,"Sepsis, severe infection, meningitis",emergency,rapid,0.12,0.78,0.08,0.02,0,0.95
+High mechanism trauma (high speed MVC),Trauma,trauma,2,Yes,No,"Serious internal injury, hemorrhage",emergency,sudden,0.10,0.75,0.13,0.02,0,0.94
+GCS <13 (any trauma),Trauma,GCS,2,Yes,No,"TBI, serious head injury",emergency,acute,0.08,0.77,0.13,0.02,0,0.94
+Severe bleeding from wound,Trauma,bleeding,2,Yes,No,"Hemorrhage, shock",emergency,sudden,0.12,0.76,0.10,0.02,0,0.94
+Pale and diaphoretic post-trauma,Trauma,shock,1,Yes,No,"Internal bleeding, shock",critical,sudden,0.85,0.12,0.03,0,0,0.96
+Mechanism: penetrating injury,Trauma,trauma,2,Yes,No,"Organ injury, hemorrhage",emergency,sudden,0.10,0.76,0.12,0.02,0,0.94
+Loss of consciousness from trauma,Trauma,consciousness,2,Yes,No,"TBI, intracranial injury",emergency,sudden,0.08,0.78,0.12,0.02,0,0.95
+Drowsiness/lethargy (not baseline),Neurological,consciousness,2,Yes,No,"Altered mental status from infection/metabolic/neuro",emergency,acute,0.12,0.76,0.10,0.02,0,0.94
+Confusion/disorientation (acute),Neurological,consciousness,2,Yes,No,"Delirium, sepsis, stroke, intoxication",emergency,acute,0.10,0.78,0.10,0.02,0,0.94
+Severe pain (7+/10) with abnormal vitals,GI/Abdominal,pain,2,Yes,No,"Organ emergency",emergency,acute,0.12,0.74,0.12,0.02,0,0.93
+Worst pain of my life (descriptive),GI/Abdominal,pain,2,Yes,No,"Organ emergency (AAA, MI, etc)",emergency,acute,0.15,0.75,0.08,0.02,0,0.94
+Radiating pain (any location),GI/Abdominal,pain,2,Yes,No,"Organ-specific emergency",emergency,acute,0.08,0.76,0.14,0.02,0,0.93
+Pain + diaphoresis + pallor,Cardiovascular,pain,2,Yes,No,"ACS, severe organ pathology",emergency,acute,0.10,0.78,0.10,0.02,0,0.95
+Severe pain + inability to move,GI/Abdominal,pain,2,Yes,No,"Peritonitis, severe pathology",emergency,acute,0.12,0.75,0.11,0.02,0,0.94
+Rapidly progressive symptoms,General,symptom progression,2,Yes,No,"Acute serious illness, sepsis, stroke",emergency,rapid,0.15,0.75,0.08,0.02,0,0.94
+Symptoms different from usual pattern,General,symptom change,2,Yes,No,"New serious pathology",emergency,acute,0.08,0.76,0.14,0.02,0,0.94
+Never happened before (first occurrence),General,symptom novelty,2,Yes,No,"Serious new condition",emergency,sudden,0.10,0.77,0.12,0.01,0,0.94
