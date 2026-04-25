@@ -17,15 +17,16 @@ type Props = {
 
 export function ThinkingPanel({ steps, isThinking }: Props) {
   const [open, setOpen] = useState(false);
+  const activeStep = steps[steps.length - 1] ?? null;
+  const isOpen = isThinking ? steps.length > 0 : open;
 
   return (
     <Collapsible
-      open={open}
+      open={isOpen}
       onOpenChange={setOpen}
       className="rounded-xl border border-[var(--thinking-border)] bg-[var(--thinking-bg)]"
     >
       <CollapsibleTrigger
-        disabled={isThinking}
         className="group flex w-full items-center justify-between gap-3 px-4 py-2.5 text-left disabled:cursor-not-allowed"
       >
         <div className="flex items-center gap-2.5">
@@ -37,15 +38,22 @@ export function ThinkingPanel({ steps, isThinking }: Props) {
             Thinking
           </span>
           {isThinking ? (
-            <span
-              className="dot-pulse ml-1"
-              role="status"
-              aria-label="Reasoning in progress"
-            >
-              <span />
-              <span />
-              <span />
-            </span>
+            <>
+              <span
+                className="dot-pulse ml-1"
+                role="status"
+                aria-label="Reasoning in progress"
+              >
+                <span />
+                <span />
+                <span />
+              </span>
+              {activeStep ? (
+                <span className="max-w-[28rem] truncate text-xs text-[var(--text-muted)]">
+                  {activeStep.label}: {activeStep.detail}
+                </span>
+              ) : null}
+            </>
           ) : (
             <span className="text-xs text-[var(--text-muted)]">
               · {steps.length} step{steps.length === 1 ? "" : "s"}
@@ -56,7 +64,7 @@ export function ThinkingPanel({ steps, isThinking }: Props) {
           <ChevronDown
             className={cn(
               "h-4 w-4 text-[var(--thinking-text)] transition-transform",
-              open && "rotate-180",
+              isOpen && "rotate-180",
             )}
             aria-hidden
           />
