@@ -28,11 +28,11 @@ type Props = {
 
 const KTAS_OPTIONS: Array<{ value: string; label: string }> = [
   { value: "", label: "(unscored — no expectation)" },
-  { value: "1", label: "1 — immediate" },
-  { value: "2", label: "2 — very urgent" },
-  { value: "3", label: "3 — urgent" },
-  { value: "4", label: "4 — standard" },
-  { value: "5", label: "5 — not urgent" },
+  { value: "1", label: "1 — Immediate" },
+  { value: "2", label: "2 — Very urgent" },
+  { value: "3", label: "3 — Urgent" },
+  { value: "4", label: "4 — Standard" },
+  { value: "5", label: "5 — Non-urgent" },
 ];
 
 const MENTAL_OPTIONS: Array<{ value: string; label: string }> = [

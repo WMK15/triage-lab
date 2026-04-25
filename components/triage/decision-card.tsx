@@ -1,4 +1,5 @@
 import { CheckCircle2 } from "lucide-react";
+import { KtasBadge } from "./ktas-badge";
 import { SeverityBadge } from "./severity-badge";
 import type { Decision } from "@/lib/triage/types";
 
@@ -18,7 +19,11 @@ export function DecisionCard({ decision }: { decision: Decision }) {
             Decision
           </span>
         </div>
-        <SeverityBadge severity={decision.severity} />
+        {decision.ktasLevel ? (
+          <KtasBadge level={decision.ktasLevel} />
+        ) : (
+          <SeverityBadge severity={decision.severity} />
+        )}
       </header>
 
       <h3 className="font-serif text-[19px] font-semibold leading-snug tracking-tight text-[var(--decision-text)]">

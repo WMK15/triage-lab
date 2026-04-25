@@ -4,7 +4,7 @@ import path from "node:path";
 const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const datasetDir = path.join(root, "dataset");
 
-const EMERGENCY_TRIAGE_CSV = path.join(datasetDir, "emergency-triage.csv");
+const EMERGENCY_TRIAGE_CSV = path.join(datasetDir, "emergency-triage-cleaned.csv");
 const SYMPTOM_REFERENCE_CSV = path.join(datasetDir, "symptom-triage-reference.csv");
 const ED_TRIAGE_CSV = path.join(datasetDir, "ed", "triage.csv");
 const ED_DIAGNOSIS_CSV = path.join(datasetDir, "ed", "diagnosis.csv");

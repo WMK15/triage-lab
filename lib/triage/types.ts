@@ -17,6 +17,7 @@ export type Decision = {
   headline: string;
   rationale: string;
   severity: Severity;
+  ktasLevel?: KtasLevel | null;
   caseProgress: number; // 0-100
 };
 

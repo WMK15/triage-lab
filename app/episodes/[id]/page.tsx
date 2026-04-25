@@ -3,6 +3,8 @@ import path from "node:path";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
+import { formatKtasLabel } from "@/lib/triage/ktas";
+
 const RUNS_DIR = path.join(process.cwd(), "triage-nurse", "runs");
 
 type Params = Promise<{ id: string }>;
@@ -53,14 +55,6 @@ type Result = {
   manual_count?: number | null;
   per_patient_assignments?: PerPatient[] | null;
   evaluation_summary?: EvalSummary | null;
-};
-
-const KTAS_NAMES: Record<number, string> = {
-  1: "immediate",
-  2: "very_urgent",
-  3: "urgent",
-  4: "standard",
-  5: "not_urgent",
 };
 
 type TrajectoryEvent =
@@ -224,14 +218,14 @@ export default async function EpisodePage({ params }: { params: Params }) {
                         {a.source}
                         {a.scored ? "" : " · unscored"}
                       </td>
-                      <td className="py-1 pr-2 font-mono">
-                        {a.truth_level != null
-                          ? `${a.truth_level} (${KTAS_NAMES[a.truth_level]})`
+                        <td className="py-1 pr-2 font-mono">
+                          {a.truth_level != null
+                          ? `${a.truth_level} (${formatKtasLabel(a.truth_level)})`
                           : "—"}
-                      </td>
-                      <td className="py-1 pr-2 font-mono">
-                        {a.agent_level} ({KTAS_NAMES[a.agent_level]})
-                      </td>
+                        </td>
+                        <td className="py-1 pr-2 font-mono">
+                        {a.agent_level} ({formatKtasLabel(a.agent_level)})
+                        </td>
                       <td className="py-1 pr-2 font-mono">{delta}</td>
                       <td className="py-1 pr-2 font-mono">
                         {a.reward != null ? a.reward.toFixed(2) : "—"}

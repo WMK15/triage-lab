@@ -2,15 +2,8 @@
 
 import { useEffect, useState } from "react";
 
+import { formatKtasLabel } from "@/lib/triage/ktas";
 import type { PatientPreview } from "@/lib/triage/types";
-
-const KTAS_NAMES: Record<number, string> = {
-  1: "immediate",
-  2: "very_urgent",
-  3: "urgent",
-  4: "standard",
-  5: "not_urgent",
-};
 
 type Props = {
   taskId: string;
@@ -99,7 +92,7 @@ export function BatchPreview({ taskId, batchSize }: Props) {
             </span>
             <span className="shrink-0 rounded-md bg-[var(--accent)]/15 px-1.5 py-0.5 text-[11px] font-semibold text-[var(--accent)]">
               {p.ground_truth_ktas != null
-                ? `KTAS ${p.ground_truth_ktas} · ${KTAS_NAMES[p.ground_truth_ktas]}`
+                ? `KTAS ${p.ground_truth_ktas} · ${formatKtasLabel(p.ground_truth_ktas)}`
                 : "unscored"}
             </span>
           </li>

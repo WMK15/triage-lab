@@ -149,6 +149,7 @@ function buildDecision(episode: EpisodePayload): Decision {
     headline: `Shift status: ${status}`,
     rationale: sentence(note ? `${summary} Operator note: ${note}` : summary),
     severity: severityFromScore(score),
+    ktasLevel: null,
     caseProgress: Math.round(score * 100),
   };
 }
@@ -217,6 +218,7 @@ function intakePrompt(assessment: Extract<AssessResponse, { kind: "question" }>)
     headline: "More information needed",
     rationale: sentence(`${assessment.summary} ${assessment.question}`),
     severity: "moderate",
+    ktasLevel: null,
     caseProgress: 35,
   };
 }
@@ -422,6 +424,7 @@ export default function TriageLabPage() {
                       headline: "Assessment failed",
                       rationale: sentence(text),
                       severity: "high",
+                      ktasLevel: null,
                       caseProgress: 0,
                     },
                     evaluation: null,
@@ -548,6 +551,7 @@ export default function TriageLabPage() {
                     headline: "Live case failed",
                     rationale: sentence(text),
                     severity: "high",
+                    ktasLevel: null,
                     caseProgress: 0,
                   },
                   evaluation: null,

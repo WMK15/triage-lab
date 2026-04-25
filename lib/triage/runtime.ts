@@ -4,6 +4,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 
+import { formatKtasLabel } from "@/lib/triage/ktas";
 import type {
   Action,
   AssessResponse,
@@ -21,7 +22,7 @@ const ROOT = process.cwd();
 const TRIAGE_NURSE_DIR = path.join(ROOT, "triage-nurse");
 const RUNS_DIR = path.join(TRIAGE_NURSE_DIR, "runs");
 const COMBINED_TRIAGE_REFERENCE_CSV = path.join(ROOT, "dataset", "combined-triage-reference.csv");
-const DATASET_CSV = path.join(ROOT, "dataset", "emergency-triage.csv");
+const DATASET_CSV = path.join(ROOT, "dataset", "emergency-triage-cleaned.csv");
 const SYMPTOM_REFERENCE_CSV = path.join(ROOT, "dataset", "symptom-triage-reference.csv");
 const ED_TRIAGE_CSV = path.join(ROOT, "dataset", "ed", "triage.csv");
 const TRIAGE_NURSE_ENV_FILE = path.join(TRIAGE_NURSE_DIR, ".env");
@@ -80,6 +81,7 @@ type DatasetRow = {
 
 type IntakeAssessment = {
   severity: Severity;
+  ktasLevel: number;
   headline: string;
   rationale: string;
   progress: number;
@@ -121,14 +123,6 @@ export type EpisodeRow = {
   disposition: string | null;
   score: number | null;
   summary: string | null;
-};
-
-const KTAS_NAMES: Record<number, string> = {
-  1: "immediate",
-  2: "very_urgent",
-  3: "urgent",
-  4: "standard",
-  5: "not_urgent",
 };
 
 function readJsonFile(filePath: string): Record<string, unknown> | null {
@@ -301,7 +295,7 @@ function fetchTasksJson(): LiveTask[] {
 
 function liveTaskOption(task: LiveTask): LiveTaskOption {
   const ktasSummary = task.ground_truth_ktas
-    .map((k) => `${k} (${KTAS_NAMES[k] ?? "?"})`)
+    .map((k) => `${k} (${formatKtasLabel(k)})`)
     .join(", ");
   return {
     id: task.id,
@@ -349,6 +343,7 @@ function assessmentFromLevel(level: number, rationale: string): IntakeAssessment
   if (level <= 1) {
     return {
       severity: "critical",
+      ktasLevel: 1,
       headline: "Immediate triage required",
       rationale,
       progress: 100,
@@ -377,6 +372,7 @@ function assessmentFromLevel(level: number, rationale: string): IntakeAssessment
   if (level === 2) {
     return {
       severity: "high",
+      ktasLevel: 2,
       headline: "Very urgent triage",
       rationale,
       progress: 90,
@@ -405,6 +401,7 @@ function assessmentFromLevel(level: number, rationale: string): IntakeAssessment
   if (level === 3) {
     return {
       severity: "moderate",
+      ktasLevel: 3,
       headline: "Urgent triage",
       rationale,
       progress: 78,
@@ -431,6 +428,7 @@ function assessmentFromLevel(level: number, rationale: string): IntakeAssessment
 
   return {
     severity: "low",
+    ktasLevel: 4,
     headline: "Standard triage",
     rationale,
     progress: 65,
@@ -1157,6 +1155,7 @@ export async function assessIntake(history: string[]): Promise<AssessResponse> {
     headline: assessment.headline,
     rationale: sentence(`${assessment.rationale}${matchedText}`),
     severity: assessment.severity,
+    ktasLevel: assessment.ktasLevel as 1 | 2 | 3 | 4 | 5,
     caseProgress: assessment.progress,
   };
 
@@ -1364,7 +1363,7 @@ function createSavedResponseEpisode(
         tool: ktasTool(assignment.agent_level),
         text: isLast
           ? savedResponseFinalText(assignments, score)
-          : `Assigned ${assignment.patient_id} -> KTAS ${assignment.agent_level} (${KTAS_NAMES[assignment.agent_level]}). ${remaining} patient${remaining === 1 ? "" : "s"} remaining.${assignment.scored ? "" : " (unscored — manual entry)"}`,
+          : `Assigned ${assignment.patient_id} -> KTAS ${assignment.agent_level} (${formatKtasLabel(assignment.agent_level)}). ${remaining} patient${remaining === 1 ? "" : "s"} remaining.${assignment.scored ? "" : " (unscored — manual entry)"}`,
         reward: isLast ? (score.compositeScore ?? 0) : (assignment.reward ?? 0),
         finished: isLast,
         ts: new Date(now + (index + 2) * 250).toISOString(),

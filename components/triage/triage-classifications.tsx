@@ -1,12 +1,5 @@
+import { formatKtasLabel } from "@/lib/triage/ktas";
 import type { TriageClassification } from "@/lib/triage/types";
-
-const KTAS_NAMES: Record<number, string> = {
-  1: "Immediate",
-  2: "Very urgent",
-  3: "Urgent",
-  4: "Standard",
-  5: "Not urgent",
-};
 
 function resultLabel(item: TriageClassification) {
   if (item.truthLevel == null) return "unscored";
@@ -65,7 +58,7 @@ export function TriageClassifications({
                     KTAS {item.agentLevel}
                   </p>
                   <p className="text-[11.5px] text-[var(--text-muted)]">
-                    {KTAS_NAMES[item.agentLevel]}
+                    {formatKtasLabel(item.agentLevel)}
                   </p>
                 </div>
               </div>

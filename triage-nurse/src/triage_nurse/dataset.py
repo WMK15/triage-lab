@@ -1,6 +1,6 @@
 """KTAS dataset loader for triage-batch v2.
 
-Reads dataset/emergency-triage.csv (semicolon-separated, n=1267) on first
+Reads dataset/emergency-triage-cleaned.csv (semicolon-separated, n=1267) on first
 access, decodes the categorical encodings documented in dataset/README.md,
 and exposes helpers consumed by the env:
 
@@ -27,7 +27,7 @@ from .world_state import KtasLevel, MentalState, Patient, TrajectoryStep, Vitals
 # (triage-nurse/src/triage_nurse/dataset.py).
 DATASET_DIR = Path(__file__).parent.parent.parent.parent / "dataset"
 COMBINED_DATASET_PATH = DATASET_DIR / "combined-triage-reference.csv"
-LEGACY_DATASET_PATH = DATASET_DIR / "emergency-triage.csv"
+LEGACY_DATASET_PATH = DATASET_DIR / "emergency-triage-cleaned.csv"
 
 _MENTAL_DECODE: dict[str, MentalState] = {
     "1": "alert",

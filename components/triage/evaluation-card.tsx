@@ -1,12 +1,5 @@
+import { formatKtasLabel } from "@/lib/triage/ktas";
 import type { EvaluationDetails } from "@/lib/triage/types";
-
-const KTAS_NAMES: Record<number, string> = {
-  1: "immediate",
-  2: "very urgent",
-  3: "urgent",
-  4: "standard",
-  5: "not urgent",
-};
 
 function formatDelta(agent: number, truth: number | null) {
   if (truth == null) return "unscored";
@@ -82,11 +75,11 @@ export function EvaluationCard({ evaluation }: { evaluation: EvaluationDetails }
                 </td>
                 <td className="py-2 pr-2 font-mono text-foreground">
                   {assignment.truth_level != null
-                    ? `${assignment.truth_level} · ${KTAS_NAMES[assignment.truth_level]}`
+                    ? `${assignment.truth_level} · ${formatKtasLabel(assignment.truth_level)}`
                     : "-"}
                 </td>
                 <td className="py-2 pr-2 font-mono text-foreground">
-                  {assignment.agent_level} · {KTAS_NAMES[assignment.agent_level]}
+                  {assignment.agent_level} · {formatKtasLabel(assignment.agent_level)}
                 </td>
                 <td className="py-2 pr-2 font-mono text-[var(--text-secondary)]">
                   {formatDelta(assignment.agent_level, assignment.truth_level)}
