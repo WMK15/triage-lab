@@ -12,10 +12,21 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  ENVIRONMENT_OPTIONS,
-} from "@/lib/triage/mock-agent";
+import { ENVIRONMENT_OPTIONS } from "@/lib/triage/mock-agent";
 import type { EnvironmentType } from "@/lib/triage/types";
+
+const PLACEHOLDERS: Record<EnvironmentType, string> = {
+  general:
+    "Describe the situation. What's happening, what's at stake, and what decision are you trying to make?",
+  planning:
+    "e.g. New-build extension submitted, neighbour objection on overlooking grounds, awaiting officer review.",
+  clinical:
+    "e.g. 58 y/o with chest tightness for 2 hours, BP 142/88, HR 96, no prior cardiac history.",
+  compliance:
+    "e.g. Vendor SOC 2 report shows a control exception in access reviews; renewal is in 3 weeks.",
+  incident:
+    "e.g. p99 latency on checkout-api jumped 4× at 14:02 UTC, correlates with the 13:58 deploy.",
+};
 
 type Props = {
   isRunning: boolean;
@@ -83,7 +94,7 @@ export function InputPanel({ isRunning, onSubmit }: Props) {
           id="scenario"
           value={scenario}
           onChange={(e) => setScenario(e.target.value)}
-          placeholder="Describe the case. e.g. 'Planning application 24/0481/F submitted without a site plan; applicant has been notified twice.'"
+          placeholder={PLACEHOLDERS[environment]}
           className="min-h-[120px] resize-none border-border bg-[var(--surface-secondary)]/40 text-[15px] leading-relaxed placeholder:text-[var(--text-muted)] focus-visible:bg-surface"
           disabled={isRunning}
         />
