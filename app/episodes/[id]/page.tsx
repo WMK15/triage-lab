@@ -25,10 +25,10 @@ type Result = {
 };
 
 type TrajectoryEvent =
-  | { turn: number; type: "tool_call"; tool: string; args: Record<string, unknown>; ts: string }
-  | { turn: number; type: "tool_result"; tool: string; text: string; reward: number; finished: boolean; ts: string }
-  | { turn: number; type: "assistant_text"; text: string; ts: string }
-  | { turn: number; type: "error"; error: string; ts: string };
+  | { turn: number; kind: "tool_call"; tool: string; args: Record<string, unknown>; ts: string }
+  | { turn: number; kind: "tool_result"; tool: string; text: string; reward: number; finished: boolean; ts: string }
+  | { turn: number; kind: "assistant_text"; text: string; ts: string }
+  | { turn: number; kind: "error"; error: string; ts: string };
 
 function readEpisode(id: string): { result: Result | null; trajectory: TrajectoryEvent[] } | null {
   const dir = path.join(RUNS_DIR, id);
@@ -49,16 +49,16 @@ function readEpisode(id: string): { result: Result | null; trajectory: Trajector
 }
 
 function summariseEvent(evt: TrajectoryEvent): string {
-  if (evt.type === "tool_call") {
+  if (evt.kind === "tool_call") {
     const argsPreview = JSON.stringify(evt.args);
     return `${evt.tool}(${argsPreview.length > 80 ? argsPreview.slice(0, 80) + "…" : argsPreview})`;
   }
-  if (evt.type === "tool_result") {
+  if (evt.kind === "tool_result") {
     const text = evt.text.length > 120 ? evt.text.slice(0, 120) + "…" : evt.text;
     const fin = evt.finished ? " · finished" : "";
     return `→ reward=${evt.reward}${fin} · ${text}`;
   }
-  if (evt.type === "assistant_text") {
+  if (evt.kind === "assistant_text") {
     return `(text only) ${evt.text.slice(0, 120)}`;
   }
   return `error: ${evt.error}`;
@@ -152,7 +152,7 @@ export default async function EpisodePage({ params }: { params: Params }) {
                   <span className="text-[var(--text-muted)]">
                     #{evt.turn.toString().padStart(3, "0")}
                   </span>{" "}
-                  <span className="text-[var(--text-muted)]">{evt.type}</span>{" "}
+                  <span className="text-[var(--text-muted)]">{evt.kind}</span>{" "}
                   {summariseEvent(evt)}
                 </li>
               ))}

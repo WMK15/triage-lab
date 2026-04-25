@@ -1,32 +1,60 @@
 import fs from "node:fs";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 
 import type { IntakeSuggestion, LiveTaskOption } from "@/lib/triage/types";
 
 const ROOT = process.cwd();
 const TRIAGE_NURSE_DIR = path.join(ROOT, "triage-nurse");
-const CASES_DIR = path.join(TRIAGE_NURSE_DIR, "cases");
 const RUNS_DIR = path.join(TRIAGE_NURSE_DIR, "runs");
 const DATASET_CSV = path.join(ROOT, "dataset", "emergency-triage.csv");
-const UV_BIN = "/home/waseef/.local/bin/uv";
 const ENV_URL = "http://127.0.0.1:8080";
 const ENV_PING_TIMEOUT_MS = 1500;
-const ENV_BOOT_TIMEOUT_MS = 10000;
+const ENV_BOOT_TIMEOUT_MS = 15000;
 const ENV_START_LOG = path.join("/tmp", "triage-nurse-env-next.log");
 
-type CaseFile = {
+/**
+ * Resolve a `uv` binary across machines:
+ *   1. UV_BIN env var (override)
+ *   2. ~/.local/bin/uv (the installer's default)
+ *   3. /opt/homebrew/bin/uv (Apple Silicon brew)
+ *   4. /usr/local/bin/uv (Intel brew or manual install)
+ *   5. /usr/bin/uv (some Linux package managers)
+ *   6. Plain "uv" — relies on PATH; works for hand-run dev shells.
+ */
+function resolveUvBin(): string {
+  if (process.env.UV_BIN && fs.existsSync(process.env.UV_BIN)) {
+    return process.env.UV_BIN;
+  }
+  const home = process.env.HOME ?? "";
+  const candidates = [
+    home ? path.join(home, ".local", "bin", "uv") : null,
+    "/opt/homebrew/bin/uv",
+    "/usr/local/bin/uv",
+    "/usr/bin/uv",
+  ].filter((p): p is string => Boolean(p));
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return "uv";
+}
+
+const UV_BIN = resolveUvBin();
+
+type LiveTask = {
   id: string;
   name: string;
-  presenting_complaint: string;
-  narrative_role: string;
-  expected_disposition?: string;
+  row_indices: number[];
+  ground_truth_ktas: number[];
+  max_turns: number;
+  shift_length_min: number;
+  seed: number;
+  n: number;
 };
 
 type DatasetRow = {
   chiefComplaint: string;
   diagnosis: string;
-  disposition: string;
   taskId: string;
 };
 
@@ -47,6 +75,14 @@ export type EpisodeRow = {
   disposition: string | null;
   score: number | null;
   summary: string | null;
+};
+
+const KTAS_NAMES: Record<number, string> = {
+  1: "immediate",
+  2: "very_urgent",
+  3: "urgent",
+  4: "standard",
+  5: "not_urgent",
 };
 
 function readJsonFile(filePath: string): Record<string, unknown> | null {
@@ -75,18 +111,54 @@ function parseCsvLine(line: string): string[] {
   return line.split(";");
 }
 
-function mapDisposition(code: string): string {
-  return (
+let liveTasksCache: LiveTaskOption[] | null = null;
+
+function fetchTasksJson(): LiveTask[] {
+  // Spawn `uv run python -m triage_nurse.harness --list-tasks` in
+  // triage-nurse/. The harness exits 0 with task JSON on stdout. No LLM
+  // key needed for this code path.
+  const result = spawnSync(
+    UV_BIN,
+    ["run", "python", "-m", "triage_nurse.harness", "--list-tasks"],
     {
-      "1": "discharge",
-      "2": "admit",
-      "3": "admit",
-      "4": "discharge",
-      "5": "transfer",
-      "6": "deceased",
-      "7": "admit",
-    }[code] ?? "review"
+      cwd: TRIAGE_NURSE_DIR,
+      encoding: "utf-8",
+    },
   );
+  if (result.status !== 0) {
+    const stderr = result.stderr || "(no stderr)";
+    throw new Error(
+      `triage-nurse harness --list-tasks failed (exit ${result.status}): ${stderr}`,
+    );
+  }
+  return JSON.parse(result.stdout) as LiveTask[];
+}
+
+function liveTaskOption(task: LiveTask): LiveTaskOption {
+  const ktasSummary = task.ground_truth_ktas
+    .map((k) => `${k} (${KTAS_NAMES[k] ?? "?"})`)
+    .join(", ");
+  return {
+    id: task.id,
+    name: task.name,
+    label: task.name,
+    hint: `${task.n} patients · KTAS levels ${ktasSummary}`,
+    narrativeRole: "batch_classification",
+    presentingComplaint: `Mixed waiting room — ${task.n} patients across the KTAS levels`,
+    expectedDisposition: `classify all ${task.n}`,
+  } satisfies LiveTaskOption;
+}
+
+export function listLiveTasks(): LiveTaskOption[] {
+  if (liveTasksCache) return liveTasksCache;
+  try {
+    const tasks = fetchTasksJson();
+    liveTasksCache = tasks.map(liveTaskOption);
+  } catch (error) {
+    console.warn("[runtime] could not fetch live tasks:", error);
+    liveTasksCache = [];
+  }
+  return liveTasksCache;
 }
 
 let datasetCache: DatasetRow[] | null = null;
@@ -100,17 +172,19 @@ function loadDatasetRows(): DatasetRow[] {
   const headers = parseCsvLine(headerLine);
   const chiefIndex = headers.indexOf("Chief_complain");
   const diagnosisIndex = headers.indexOf("Diagnosis in ED");
-  const dispositionIndex = headers.indexOf("Disposition");
 
   const taskIds = listLiveTasks().map((task) => task.id);
+  if (taskIds.length === 0) {
+    datasetCache = [];
+    return datasetCache;
+  }
 
   datasetCache = lines.map((line, index) => {
     const cols = parseCsvLine(line);
     return {
       chiefComplaint: cols[chiefIndex] ?? "",
       diagnosis: cols[diagnosisIndex] ?? "",
-      disposition: mapDisposition(cols[dispositionIndex] ?? ""),
-      taskId: taskIds[index % taskIds.length] ?? "demo-shift",
+      taskId: taskIds[index % taskIds.length],
     } satisfies DatasetRow;
   });
 
@@ -133,7 +207,8 @@ async function isEnvReady(): Promise<boolean> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), ENV_PING_TIMEOUT_MS);
   try {
-    const res = await fetch(`${ENV_URL}/health`, {
+    // OpenReward exposes /openapi.json as a reliable readiness probe.
+    const res = await fetch(`${ENV_URL}/openapi.json`, {
       signal: controller.signal,
       cache: "no-store",
     });
@@ -165,27 +240,6 @@ async function ensureEnvServer(): Promise<void> {
   throw new Error("triage-nurse env server did not become ready");
 }
 
-export function listLiveTasks(): LiveTaskOption[] {
-  if (!fs.existsSync(CASES_DIR)) return [];
-  return fs
-    .readdirSync(CASES_DIR)
-    .filter((name) => name.endsWith(".json") && name !== "demo_shift.json")
-    .sort()
-    .map((name) => {
-      const fullPath = path.join(CASES_DIR, name);
-      const file = JSON.parse(fs.readFileSync(fullPath, "utf-8")) as CaseFile;
-      return {
-        id: file.id,
-        name: file.name,
-        label: file.name,
-        hint: file.presenting_complaint,
-        narrativeRole: file.narrative_role,
-        presentingComplaint: file.presenting_complaint,
-        expectedDisposition: file.expected_disposition ?? "admit",
-      } satisfies LiveTaskOption;
-    });
-}
-
 export function suggestCasesFromIntake(input: string): IntakeSuggestion[] {
   const query = input.trim();
   if (!query) return [];
@@ -202,7 +256,7 @@ export function suggestCasesFromIntake(input: string): IntakeSuggestion[] {
         caseLabel: task?.label ?? row.taskId,
         complaint: row.chiefComplaint || "Unknown complaint",
         diagnosis: row.diagnosis || "Unknown diagnosis",
-        disposition: row.disposition,
+        disposition: "classify",
         score,
       } satisfies IntakeSuggestion;
     })
@@ -223,6 +277,17 @@ export function getEpisodeData(id: string): EpisodeData | null {
     trajectory: readJsonlFile(path.join(dir, "trajectory.jsonl")),
     rewards: readJsonlFile(path.join(dir, "rewards.jsonl")),
   };
+}
+
+function pickScore(result: Record<string, unknown> | null): number | null {
+  if (!result) return null;
+  // Prefer the v2 fields (composite_score / score) before falling back to
+  // total_reward (a sum, not normalised — useful only when the others are
+  // missing).
+  if (typeof result.composite_score === "number") return result.composite_score;
+  if (typeof result.score === "number") return result.score;
+  if (typeof result.total_reward === "number") return result.total_reward;
+  return null;
 }
 
 export function listEpisodes(): EpisodeRow[] {
@@ -250,12 +315,7 @@ export function listEpisodes(): EpisodeRow[] {
               : null,
         disposition:
           typeof result?.disposition === "string" ? result.disposition : null,
-        score:
-          typeof result?.score === "number"
-            ? result.score
-            : typeof result?.total_reward === "number"
-              ? result.total_reward
-              : null,
+        score: pickScore(result),
         summary:
           typeof result?.summary === "string"
             ? result.summary
@@ -282,13 +342,23 @@ export async function runLiveEpisode(
       : [],
   );
 
-  const args = ["run", "python", "-m", "triage_nurse.harness", "--task", "demo-shift-001"];
+  // Pass the actual selected taskId (v1 hardcoded "demo-shift-001"; v2 batches
+  // are e.g. batch-seed42).
+  const args = [
+    "run",
+    "python",
+    "-m",
+    "triage_nurse.harness",
+    "--task",
+    taskId,
+    "--max-turns",
+    "50",
+  ];
   const child = spawn(UV_BIN, args, {
     cwd: TRIAGE_NURSE_DIR,
     stdio: ["ignore", "pipe", "pipe"],
     env: {
       ...process.env,
-      TRIAGE_SELECTED_CASE: taskId,
       TRIAGE_OPERATOR_NOTE: operatorNote?.trim() ?? "",
     },
   });
@@ -305,7 +375,10 @@ export async function runLiveEpisode(
 
   if (exitCode !== 0) {
     throw new Error(
-      `triage harness failed: ${Buffer.concat(stderr).toString("utf-8") || Buffer.concat(stdout).toString("utf-8")}`,
+      `triage harness failed (exit ${exitCode}): ${
+        Buffer.concat(stderr).toString("utf-8") ||
+        Buffer.concat(stdout).toString("utf-8")
+      }`,
     );
   }
 
@@ -316,6 +389,7 @@ export async function runLiveEpisode(
   const created = after.find((name) => !before.has(name));
 
   if (!created) {
+    // Fallback: parse the harness's own success-line for the episode id.
     const match = Buffer.concat(stdout)
       .toString("utf-8")
       .match(/\[harness\]\s+([^\s]+)\s+status=/);
