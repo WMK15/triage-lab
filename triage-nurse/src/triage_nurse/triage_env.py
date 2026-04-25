@@ -312,10 +312,13 @@ class TriageEnv(Environment):
             lines.append(f"Operator note from frontend: {operator_note}")
         if selected_case or operator_note:
             lines.append("")
-        lines.append("Expected arrivals on this shift:")
+        lines.append(
+            "Expected arrivals on this shift (use the patient_id verbatim "
+            "in tool calls — these strings are the canonical IDs):"
+        )
         for _pid, p in sorted(self.world.patients.items(), key=lambda kv: kv[1].arrived_at_min):
             lines.append(
-                f"  - {p.name} ({p.id}) — arriving at +{p.arrived_at_min} min"
+                f'  - patient_id="{p.id}" — arriving at +{p.arrived_at_min} min'
                 f" — {p.presenting_complaint}"
             )
         lines.append("")
