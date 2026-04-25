@@ -155,55 +155,55 @@ export function ManualPatientCard({ index, patient, onChange, onRemove }: Props)
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value=" ">(unspecified)</SelectItem>
-                <SelectItem value="F">F</SelectItem>
-                <SelectItem value="M">M</SelectItem>
+                <SelectItem value="F">Female</SelectItem>
+                <SelectItem value="M">Male</SelectItem>
               </SelectContent>
             </Select>
           </label>
           <NumberField
-            label="HR"
+            label="Heart rate"
             value={patient.vitals?.hr}
             onChange={(v) => updateVitals({ hr: v })}
             min={20}
             max={220}
           />
           <NumberField
-            label="SBP"
+            label="Systolic blood pressure"
             value={patient.vitals?.sbp}
             onChange={(v) => updateVitals({ sbp: v })}
             min={40}
             max={260}
           />
           <NumberField
-            label="DBP"
+            label="Diastolic blood pressure"
             value={patient.vitals?.dbp}
             onChange={(v) => updateVitals({ dbp: v })}
             min={20}
             max={160}
           />
           <NumberField
-            label="RR"
+            label="Respiratory rate"
             value={patient.vitals?.rr}
             onChange={(v) => updateVitals({ rr: v })}
             min={4}
             max={60}
           />
           <NumberField
-            label="SpO2 %"
+            label="Oxygen saturation (%)"
             value={patient.vitals?.spo2}
             onChange={(v) => updateVitals({ spo2: v })}
             min={50}
             max={100}
           />
           <NumberField
-            label="Temp °C"
+            label="Temperature (Celsius)"
             value={patient.vitals?.tempC}
             onChange={(v) => updateVitals({ tempC: v })}
             min={30}
             max={45}
           />
           <NumberField
-            label="NRS pain"
+            label="Numeric Rating Scale pain"
             value={patient.nrsPain}
             onChange={(v) => update({ nrsPain: v })}
             min={0}
