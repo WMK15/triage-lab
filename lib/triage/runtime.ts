@@ -1,8 +1,16 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import crypto from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 
-import type { IntakeSuggestion, LiveTaskOption } from "@/lib/triage/types";
+import type {
+  IntakeSuggestion,
+  LiveTaskOption,
+  ManualPatient,
+  PatientPreview,
+  RunRequest,
+} from "@/lib/triage/types";
 
 const ROOT = process.cwd();
 const TRIAGE_NURSE_DIR = path.join(ROOT, "triage-nurse");
@@ -327,9 +335,146 @@ export function listEpisodes(): EpisodeRow[] {
     .sort((a, b) => b.modifiedAt - a.modifiedAt);
 }
 
-export async function runLiveEpisode(
+// ----- v3: preview + per-mode run dispatch ------------------------------
+
+type PreviewResponse = { task_id?: string; patients: PatientPreview[] };
+
+const previewCache = new Map<string, PatientPreview[]>();
+
+function previewKey(taskId: string, batchSize: number): string {
+  return `${taskId}|${batchSize}`;
+}
+
+/** Fetch the patients the env will load for a given (taskId, batchSize),
+ *  cached in memory. Spawns `uv run python -m triage_nurse.harness --preview`. */
+export function previewBatch(
   taskId: string,
-  operatorNote?: string,
+  batchSize: number,
+): PatientPreview[] {
+  const key = previewKey(taskId, batchSize);
+  const cached = previewCache.get(key);
+  if (cached) return cached;
+
+  const result = spawnSync(
+    UV_BIN,
+    [
+      "run",
+      "python",
+      "-m",
+      "triage_nurse.harness",
+      "--preview",
+      taskId,
+      "--n",
+      String(batchSize),
+    ],
+    { cwd: TRIAGE_NURSE_DIR, encoding: "utf-8" },
+  );
+  if (result.status !== 0) {
+    const stderr = result.stderr || "(no stderr)";
+    throw new Error(
+      `harness --preview ${taskId} failed (exit ${result.status}): ${stderr}`,
+    );
+  }
+  const parsed = JSON.parse(result.stdout) as PreviewResponse;
+  const patients = parsed.patients ?? [];
+  previewCache.set(key, patients);
+  return patients;
+}
+
+function manualPatientToPython(p: ManualPatient): Record<string, unknown> {
+  // The Python `synthesize_manual_patient` reads snake_case fields. Map TS
+  // camelCase ↔ Python snake_case here.
+  const out: Record<string, unknown> = {
+    chief_complaint: p.chiefComplaint,
+  };
+  if (p.age != null) out.age = p.age;
+  if (p.sex != null) out.sex = p.sex;
+  if (p.mentalState != null) out.mental_state = p.mentalState;
+  if (p.nrsPain != null) out.nrs_pain = p.nrsPain;
+  if (p.expectedKtas != null) out.expected_ktas = p.expectedKtas;
+  if (p.vitals && typeof p.vitals === "object") {
+    const v = p.vitals;
+    const vitals: Record<string, number> = {};
+    if (v.hr != null) vitals.hr = v.hr;
+    if (v.sbp != null) vitals.sbp = v.sbp;
+    if (v.dbp != null) vitals.dbp = v.dbp;
+    if (v.rr != null) vitals.rr = v.rr;
+    if (v.spo2 != null) vitals.spo2 = v.spo2;
+    if (v.tempC != null) vitals.temp_c = v.tempC;
+    if (Object.keys(vitals).length > 0) out.vitals = vitals;
+  }
+  return out;
+}
+
+function buildAdHocSpec(req: RunRequest): {
+  spec: Record<string, unknown>;
+  taskId: string;
+} {
+  if (req.mode === "test") {
+    // Look up the task by id, override row_indices for the chosen batchSize.
+    const allTasks = fetchTasksJson();
+    const base = allTasks.find((t) => t.id === req.taskId);
+    if (!base) throw new Error(`unknown taskId: ${req.taskId}`);
+    const spec: Record<string, unknown> = {
+      ...base,
+      n: req.batchSize,
+      // Drop the cached row_indices — env will recompute via select_diverse_batch.
+      row_indices: undefined,
+      max_turns: 50,
+    };
+    if (req.extraPatient && req.extraPatient.trim().length > 0) {
+      spec.manual_patients = [
+        manualPatientToPython({ chiefComplaint: req.extraPatient.trim() }),
+      ];
+    }
+    // The env's _build_world picks new row_indices from seed+n. Pass the
+    // resolved indices anyway so preview / run agree byte-for-byte.
+    spec.id = `${base.id}-n${req.batchSize}${req.extraPatient ? "-extra" : ""}`;
+    spec.row_indices = []; // force env to use seed+n path
+    return { spec, taskId: String(spec.id) };
+  }
+  if (req.mode === "manual-single") {
+    const spec: Record<string, unknown> = {
+      id: `manual-single-${Date.now().toString(36)}`,
+      row_indices: [],
+      manual_patients: [manualPatientToPython(req.patient)],
+      max_turns: 20,
+      shift_length_min: 60,
+      seed: 0,
+      n: 0,
+    };
+    return { spec, taskId: String(spec.id) };
+  }
+  // manual-multi
+  const cleaned = req.patients
+    .filter((p) => p.chiefComplaint.trim().length > 0)
+    .slice(0, 8);
+  if (cleaned.length === 0) {
+    throw new Error("manual-multi requires at least one patient with a chief complaint");
+  }
+  const spec: Record<string, unknown> = {
+    id: `manual-multi-${cleaned.length}-${Date.now().toString(36)}`,
+    row_indices: [],
+    manual_patients: cleaned.map(manualPatientToPython),
+    max_turns: Math.max(20, cleaned.length * 5),
+    shift_length_min: 60,
+    seed: 0,
+    n: 0,
+  };
+  return { spec, taskId: String(spec.id) };
+}
+
+function writeTempSpec(spec: Record<string, unknown>): string {
+  const tempPath = path.join(
+    os.tmpdir(),
+    `triage-task-${crypto.randomBytes(6).toString("hex")}.json`,
+  );
+  fs.writeFileSync(tempPath, JSON.stringify(spec, null, 2));
+  return tempPath;
+}
+
+export async function runLiveEpisode(
+  request: RunRequest,
 ): Promise<{ episodeId: string }> {
   await ensureEnvServer();
 
@@ -342,60 +487,64 @@ export async function runLiveEpisode(
       : [],
   );
 
-  // Pass the actual selected taskId (v1 hardcoded "demo-shift-001"; v2 batches
-  // are e.g. batch-seed42).
-  const args = [
-    "run",
-    "python",
-    "-m",
-    "triage_nurse.harness",
-    "--task",
-    taskId,
-    "--max-turns",
-    "50",
-  ];
-  const child = spawn(UV_BIN, args, {
-    cwd: TRIAGE_NURSE_DIR,
-    stdio: ["ignore", "pipe", "pipe"],
-    env: {
-      ...process.env,
-      TRIAGE_OPERATOR_NOTE: operatorNote?.trim() ?? "",
-    },
-  });
+  const { spec } = buildAdHocSpec(request);
+  const tempPath = writeTempSpec(spec);
 
-  const stdout: Buffer[] = [];
-  const stderr: Buffer[] = [];
-  child.stdout.on("data", (chunk) => stdout.push(Buffer.from(chunk)));
-  child.stderr.on("data", (chunk) => stderr.push(Buffer.from(chunk)));
+  try {
+    const args = [
+      "run",
+      "python",
+      "-m",
+      "triage_nurse.harness",
+      "--task-spec-file",
+      tempPath,
+      "--max-turns",
+      String(spec.max_turns ?? 50),
+    ];
+    const child = spawn(UV_BIN, args, {
+      cwd: TRIAGE_NURSE_DIR,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env },
+    });
 
-  const exitCode: number = await new Promise((resolve, reject) => {
-    child.on("error", reject);
-    child.on("close", resolve);
-  });
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    child.stdout.on("data", (chunk) => stdout.push(Buffer.from(chunk)));
+    child.stderr.on("data", (chunk) => stderr.push(Buffer.from(chunk)));
 
-  if (exitCode !== 0) {
-    throw new Error(
-      `triage harness failed (exit ${exitCode}): ${
-        Buffer.concat(stderr).toString("utf-8") ||
-        Buffer.concat(stdout).toString("utf-8")
-      }`,
-    );
+    const exitCode: number = await new Promise((resolve, reject) => {
+      child.on("error", reject);
+      child.on("close", resolve);
+    });
+
+    if (exitCode !== 0) {
+      throw new Error(
+        `triage harness failed (exit ${exitCode}): ${
+          Buffer.concat(stderr).toString("utf-8") ||
+          Buffer.concat(stdout).toString("utf-8")
+        }`,
+      );
+    }
+
+    const after = fs
+      .readdirSync(RUNS_DIR, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
+    const created = after.find((name) => !before.has(name));
+
+    if (!created) {
+      const match = Buffer.concat(stdout)
+        .toString("utf-8")
+        .match(/\[harness\]\s+([^\s]+)\s+status=/);
+      if (match?.[1]) return { episodeId: match[1] };
+      throw new Error("could not determine created episode id");
+    }
+    return { episodeId: created };
+  } finally {
+    try {
+      fs.unlinkSync(tempPath);
+    } catch {
+      // ignore — best-effort cleanup
+    }
   }
-
-  const after = fs
-    .readdirSync(RUNS_DIR, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name);
-  const created = after.find((name) => !before.has(name));
-
-  if (!created) {
-    // Fallback: parse the harness's own success-line for the episode id.
-    const match = Buffer.concat(stdout)
-      .toString("utf-8")
-      .match(/\[harness\]\s+([^\s]+)\s+status=/);
-    if (match?.[1]) return { episodeId: match[1] };
-    throw new Error("could not determine created episode id");
-  }
-
-  return { episodeId: created };
 }

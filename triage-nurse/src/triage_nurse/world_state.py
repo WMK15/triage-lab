@@ -51,7 +51,11 @@ class Patient(BaseModel):
     nrs_pain: int | None
     vitals: Vitals
     trajectory: list[TrajectoryStep]
-    ground_truth_ktas: KtasLevel
+    # Optional: dataset-derived patients have it from KTAS_expert; manual
+    # patients have it set to expected_ktas (when user provided one) or None
+    # (unscored). Unscored patients still get classified by the agent but
+    # don't contribute to the composite.
+    ground_truth_ktas: KtasLevel | None = None
 
 
 class WorldState(BaseModel):
