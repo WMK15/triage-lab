@@ -101,9 +101,9 @@ Cross-sectional retrospective study of adult patient records from two South Kore
 ### `NRS_pain`
 **What it is:** Nurse-assessed pain intensity using the Numeric Rating Scale — a patient self-reported 11-point scale.
 **Type:** Numeric (integer 0–10)
-**Missing:** 0 recorded, but **556 corrupt entries** (#BOÞ!)
-**Values:** 1–10 (only patients with `Pain = 1` have a meaningful score)
-**Data Quality Alert:** 🔴 **CRITICAL** — 556 rows (~43.9% of data) contain corrupt value `#BOÞ!` (encoding error). Original documentation stated only 1 corrupt value; actual count is 556x higher. **Recommendation:** Either (1) exclude NRS_pain entirely and use binary `Pain` column as proxy, (2) impute using `Pain` + clinical context, or (3) remove affected rows from training.
+**Missing:** 556 rows (~43.9% of data)
+**Values:** 1–10 (only patients with `Pain = 1` have a meaningful score); empty/NaN for corrupted entries
+**Data Quality Alert:** 🔴 **CRITICAL** — 556 rows (~43.9% of data) had corrupt value `#BOÞ!` (encoding error) in original dataset. **CLEANED:** All corrupted #BOÞ! values converted to empty strings (NaN) in cleaned dataset. Original documentation stated only 1 corrupt value; actual count is 556x higher. **Recommendation for training:** Either (1) exclude NRS_pain feature entirely and use binary `Pain` column (0/1) as proxy instead, or (2) impute missing NRS_pain using clinical context + Pain + vital signs.
 
 ---
 
