@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import re
 from pathlib import Path
 from typing import Any
 
@@ -466,7 +467,182 @@ def load_row(row_index: int) -> Patient:
     return patient
 
 
-def select_diverse_batch(seed: int, n: int = 5, split: str | None = None) -> list[int]:
+_HR_RE = re.compile(r"\bHR\s*[:=]?\s*(\d{2,3})\b", re.IGNORECASE)
+_BP_RE = re.compile(r"\bBP\s*[:=]?\s*(\d{2,3})\s*/\s*(\d{2,3})\b", re.IGNORECASE)
+_RR_RE = re.compile(r"\bRR\s*[:=]?\s*(\d{1,2})\b", re.IGNORECASE)
+_SPO2_RE = re.compile(r"\b(?:SpO2|sat|sats?)\s*[:=]?\s*(\d{2,3})\b", re.IGNORECASE)
+_TEMP_RE = re.compile(r"\b(?:temp|°?C|temperature)\s*[:=]?\s*(\d{2}(?:\.\d)?)\b", re.IGNORECASE)
+_AGE_RE = re.compile(r"\b(\d{1,3})\s*(?:yo|year[- ]?old|yrs?|y/o)\b", re.IGNORECASE)
+_SEX_RE = re.compile(r"\b(male|female|man|woman|m\b|f\b)\b", re.IGNORECASE)
+_NRS_RE = re.compile(r"\bNRS\s*[:=]?\s*(\d{1,2})\b", re.IGNORECASE)
+
+
+def _extract_int(text: str, regex: re.Pattern[str]) -> int | None:
+    m = regex.search(text)
+    if not m:
+        return None
+    try:
+        return int(m.group(1))
+    except (TypeError, ValueError):
+        return None
+
+
+def _extract_sex(text: str) -> str | None:
+    m = _SEX_RE.search(text)
+    if not m:
+        return None
+    token = m.group(1).lower()
+    if token in ("male", "man") or token == "m":
+        return "M"
+    if token in ("female", "woman") or token == "f":
+        return "F"
+    return None
+
+
+def synthesize_manual_patient(payload: dict, idx: int) -> Patient:
+    """Build a Patient from a user-entered manual-patient payload.
+
+    Payload shape (all fields optional except chief_complaint):
+        {
+            "chief_complaint": str,
+            "age": int | None,
+            "sex": "M" | "F" | None,
+            "vitals": {hr, sbp, dbp, rr, spo2, temp_c} | None,
+            "mental_state": "alert" | ... | None,
+            "nrs_pain": int | None,
+            "expected_ktas": 1..5 | None,
+        }
+
+    Resolution order for each field:
+      1. Structured value if provided (and valid)
+      2. Regex extraction from chief_complaint free text
+      3. Placeholder (HR 90, BP 120/80, RR 16, SpO2 98, Temp 37.0, alert, NRS none)
+
+    Trajectory is a single step at offset 0 with state="As reported by
+    operator" and requires_intervention=False — no deterioration over wait.
+    """
+    chief = (payload.get("chief_complaint") or "").strip()
+    if not chief:
+        chief = "(no description provided)"
+
+    # Age
+    age = payload.get("age")
+    if not isinstance(age, int) or age <= 0 or age > 130:
+        age = _extract_int(chief, _AGE_RE)
+    if age is None:
+        age = 50  # placeholder midlife default
+
+    # Sex
+    sex_raw = payload.get("sex")
+    if sex_raw in ("M", "F"):
+        sex: str = sex_raw
+    else:
+        extracted = _extract_sex(chief)
+        sex = extracted if extracted else "M"  # placeholder
+
+    # Vitals
+    vitals_payload = payload.get("vitals") or {}
+    if not isinstance(vitals_payload, dict):
+        vitals_payload = {}
+
+    def _v(key: str, regex: re.Pattern[str] | None, default: int) -> int:
+        val = vitals_payload.get(key)
+        if isinstance(val, int) and val > 0:
+            return val
+        if regex is not None:
+            extracted = _extract_int(chief, regex)
+            if extracted is not None:
+                return extracted
+        return default
+
+    hr = _v("hr", _HR_RE, 90)
+    rr = _v("rr", _RR_RE, 16)
+    spo2 = _v("spo2", _SPO2_RE, 98)
+
+    bp_payload = (vitals_payload.get("sbp"), vitals_payload.get("dbp"))
+    if (
+        isinstance(bp_payload[0], int)
+        and isinstance(bp_payload[1], int)
+        and bp_payload[0] > 0
+        and bp_payload[1] > 0
+    ):
+        sbp, dbp = bp_payload
+    else:
+        m = _BP_RE.search(chief)
+        if m:
+            sbp = int(m.group(1))
+            dbp = int(m.group(2))
+        else:
+            sbp, dbp = 120, 80
+
+    temp_payload = vitals_payload.get("temp_c")
+    if isinstance(temp_payload, (int, float)) and temp_payload > 0:
+        temp_c = float(temp_payload)
+    else:
+        m = _TEMP_RE.search(chief)
+        if m:
+            try:
+                temp_c = float(m.group(1))
+            except (TypeError, ValueError):
+                temp_c = 37.0
+        else:
+            temp_c = 37.0
+
+    # Mental state
+    mental_raw = payload.get("mental_state")
+    mental: MentalState = (
+        mental_raw
+        if mental_raw in ("alert", "verbal", "pain", "unresponsive")
+        else "alert"
+    )
+
+    # NRS pain
+    nrs = payload.get("nrs_pain")
+    if not isinstance(nrs, int) or nrs < 0 or nrs > 10:
+        nrs = _extract_int(chief, _NRS_RE)
+    if nrs is not None and (nrs < 0 or nrs > 10):
+        nrs = None
+
+    # Optional expected ground truth from user
+    expected = payload.get("expected_ktas")
+    expected_ktas: KtasLevel | None = (
+        expected if isinstance(expected, int) and 1 <= expected <= 5 else None
+    )  # type: ignore[assignment]
+
+    pid = f"manual-{idx}"
+    history = (
+        f"{age}{sex.lower()}, mental: {mental}"
+        + (f", NRS pain {nrs}/10" if nrs is not None else ", pain not reported")
+        + f", presents with: {chief}"
+    )
+    return Patient(
+        id=pid,
+        age=age,
+        sex=sex,  # type: ignore[arg-type]
+        chief_complaint=chief,
+        history=history,
+        mental_state=mental,
+        nrs_pain=nrs,
+        vitals=Vitals(
+            hr=hr,
+            sbp=sbp,
+            dbp=dbp,
+            rr=rr,
+            spo2=spo2,
+            temp_c=temp_c,
+        ),
+        trajectory=[
+            TrajectoryStep(
+                time_offset_min=0,
+                state="As reported by operator (manual entry).",
+                requires_intervention=False,
+            )
+        ],
+        ground_truth_ktas=expected_ktas,
+    )
+
+
+def select_diverse_batch(seed: int, n: int = 5) -> list[int]:
     """Return n CSV row indices with at least one KTAS 1-2 and at least one
     KTAS 4-5. Deterministic given seed.
 

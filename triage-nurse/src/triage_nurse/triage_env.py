@@ -9,6 +9,7 @@ API verified against openreward==0.1.106.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from openreward.environments import (
@@ -23,8 +24,12 @@ from openreward.environments import (
 from pydantic import BaseModel
 
 from . import dataset, scoring
-from .scoring import AssignmentResult
+from .scoring import AssignmentResult, evaluation_summary
 from .world_state import KTAS_NAMES, KtasLevel, Patient, WorldState
+
+# Delimiter the harness scans for in submit-handoff text to lift structured
+# meta out of the terminator. Below this line the text is JSON.
+META_DELIMITER = "\n--META--\n"
 
 # ---- Tool param schemas ---------------------------------------------------
 
@@ -46,15 +51,33 @@ class AssignParams(BaseModel):
 
 
 def _build_world(task_spec: dict[str, Any]) -> WorldState:
-    row_indices: list[int] = list(task_spec.get("row_indices", []))
+    """Build the world from the task spec.
+
+    The spec can mix two patient sources:
+      - row_indices: list of CSV row indices (scored against KTAS_expert)
+      - manual_patients: list of user-entered payloads (scored against
+        expected_ktas if provided, else unscored)
+
+    If both are empty and `n` is non-zero, falls back to
+    select_diverse_batch(seed, n).
+    """
+    row_indices: list[int] = list(task_spec.get("row_indices") or [])
+    manual_payloads: list[dict] = list(task_spec.get("manual_patients") or [])
+
+    # Auto-select dataset rows from seed+n when no explicit indices are
+    # provided AND n > 0. This is independent of manual_patients — manual
+    # entries are additive (Option C: test batch + extra patient).
     if not row_indices:
         seed = int(task_spec.get("seed", 0))
-        n = int(task_spec.get("n", 5))
-        split = str(task_spec.get("split", "test"))
-        row_indices = dataset.select_diverse_batch(seed=seed, n=n, split=split)
+        n = int(task_spec.get("n", 0))
+        if n > 0:
+            row_indices = dataset.select_diverse_batch(seed=seed, n=n)
+
     patients: dict[str, Patient] = {}
     charts: dict[str, list[str]] = {}
     assigned: dict[str, KtasLevel | None] = {}
+
+    # Insert dataset patients first, preserving the order from row_indices.
     for idx in row_indices:
         p = dataset.load_row(idx)
         patients[p.id] = p
@@ -63,6 +86,20 @@ def _build_world(task_spec: dict[str, Any]) -> WorldState:
             f"History: {p.history}",
         ]
         assigned[p.id] = None
+
+    # Then manual patients, with monotonic ids.
+    for i, payload in enumerate(manual_payloads):
+        if not isinstance(payload, dict):
+            continue
+        p = dataset.synthesize_manual_patient(payload, i)
+        patients[p.id] = p
+        charts[p.id] = [
+            f"Chief complaint: {p.chief_complaint}",
+            f"History: {p.history}",
+            "(manual entry — no dataset trajectory)",
+        ]
+        assigned[p.id] = None
+
     return WorldState(
         sim_time_min=0,
         patients=patients,
@@ -117,11 +154,15 @@ class TriageBatchEnv(Environment):
 
     def get_prompt(self) -> list[TextBlock]:
         lines: list[str] = []
+        n_total = self._n_total
         lines.append(
-            "You are an ED triage nurse. Five patients are waiting. Classify "
-            "each into one of the five Manchester / KTAS triage levels by "
-            "calling the matching tool with the patient_id. Triage the "
-            "sickest first — ordering matters."
+            f"You are an ED triage nurse. {n_total} patient"
+            + ("s" if n_total != 1 else "")
+            + " "
+            + ("are" if n_total != 1 else "is")
+            + " waiting. Classify each into one of the five "
+            "Manchester / KTAS triage levels by calling the matching tool with "
+            "the patient_id. Triage the sickest first — ordering matters."
         )
         lines.append("")
         lines.append("Levels (each is its own tool):")
@@ -142,7 +183,8 @@ class TriageBatchEnv(Environment):
         lines.append("")
         lines.append(
             "Use patient_id verbatim from the list below. Each patient must be "
-            "assigned exactly one level. Episode ends when all five are done."
+            f"assigned exactly one level. Episode ends when all {n_total} "
+            "are done."
         )
         lines.append("")
         lines.append("Patients in the waiting room:")
@@ -203,8 +245,19 @@ class TriageBatchEnv(Environment):
             )
 
         self.world.assigned[patient_id] = level
-        truth = self.world.patients[patient_id].ground_truth_ktas
-        reward = scoring.assignment_reward(level, truth)
+        patient = self.world.patients[patient_id]
+        truth = patient.ground_truth_ktas
+        # When the patient has no truth (manual entry without expected_ktas),
+        # the assignment is recorded but unscored — reward stays at 0.0 and
+        # contributes nothing to the composite.
+        if truth is None:
+            reward: float | None = None
+            per_tool_reward = 0.0
+            scored = False
+        else:
+            reward = scoring.assignment_reward(level, truth)
+            per_tool_reward = reward
+            scored = True
         order = sum(1 for v in self.world.assigned.values() if v is not None)
         self._assignments.append(
             AssignmentResult(
@@ -216,30 +269,103 @@ class TriageBatchEnv(Environment):
             )
         )
         self._summary(
-            f"assign {patient_id} -> KTAS {level} (truth={truth}, "
-            f"reward={reward:.2f}, order={order})"
+            f"assign {patient_id} -> KTAS {level} "
+            + (
+                f"(truth={truth}, reward={reward:.2f}, scored, order={order})"
+                if scored and reward is not None
+                else f"(unscored manual, order={order})"
+            )
         )
 
         if self._all_assigned():
             breakdown = scoring.score_batch(self._assignments)
-            text_lines = [
-                f"All {self._n_total} patients assigned. Composite: {breakdown.composite:.3f}",
-                f"  Base (mean per-patient): {breakdown.base_reward:.3f}",
-                f"  Ordering bonus: {breakdown.ordering_bonus:+.2f}",
-            ]
-            for a in breakdown.per_assignment:
-                tag = (
-                    "match"
-                    if a.agent_level == a.truth_level
-                    else ("over" if a.agent_level < a.truth_level else "UNDER")
-                )
+            eval_summary = evaluation_summary(self._assignments)
+            scored_count = sum(1 for a in self._assignments if a.scored)
+            manual_count = len(self._assignments) - scored_count
+
+            composite = breakdown.composite
+            base = breakdown.base_reward
+            text_lines = [f"All {self._n_total} patients assigned."]
+            if composite is not None and base is not None:
+                text_lines.append(f"Composite: {composite:.3f}")
+                text_lines.append(f"  Base (mean over scored): {base:.3f}")
                 text_lines.append(
-                    f"  {a.patient_id}: agent KTAS {a.agent_level} "
-                    f"vs truth {a.truth_level} ({tag}, reward {a.reward:.2f})"
+                    f"  Ordering bonus: {breakdown.ordering_bonus:+.2f}"
                 )
+            else:
+                text_lines.append(
+                    "Composite: (none — pure-manual run, no ground truth)"
+                )
+            text_lines.append("")
+            text_lines.append(
+                f"Scored: {scored_count} | Manual / unscored: {manual_count}"
+            )
+            for a in breakdown.per_assignment:
+                if a.truth_level is None:
+                    text_lines.append(
+                        f"  {a.patient_id}: agent KTAS {a.agent_level} "
+                        f"(unscored — no truth)"
+                    )
+                else:
+                    tag = (
+                        "match"
+                        if a.agent_level == a.truth_level
+                        else (
+                            "over"
+                            if a.agent_level < a.truth_level
+                            else "UNDER"
+                        )
+                    )
+                    reward_str = (
+                        f"{a.reward:.2f}" if a.reward is not None else "n/a"
+                    )
+                    text_lines.append(
+                        f"  {a.patient_id}: agent KTAS {a.agent_level} "
+                        f"vs truth {a.truth_level} ({tag}, reward {reward_str})"
+                    )
+
+            # Embed structured meta below a delimiter so the harness can lift
+            # it into result.json. Above the delimiter is human-readable.
+            meta = {
+                "scored_count": scored_count,
+                "manual_count": manual_count,
+                "composite_score": composite,
+                "base_reward": base,
+                "ordering_bonus": breakdown.ordering_bonus,
+                "per_patient_assignments": [
+                    {
+                        "patient_id": a.patient_id,
+                        "agent_level": a.agent_level,
+                        "truth_level": a.truth_level,
+                        "reward": a.reward,
+                        "order": a.order,
+                        "scored": a.scored,
+                        "source": (
+                            "manual"
+                            if a.patient_id.startswith("manual-")
+                            else "dataset"
+                        ),
+                        "chief_complaint": self.world.patients[
+                            a.patient_id
+                        ].chief_complaint,
+                    }
+                    for a in breakdown.per_assignment
+                ],
+                "evaluation_summary": (
+                    eval_summary.model_dump() if eval_summary is not None else None
+                ),
+            }
+            text_with_meta = (
+                "\n".join(text_lines)
+                + META_DELIMITER
+                + json.dumps(meta, indent=2)
+            )
+
+            # The terminator's reward is the composite (or 0 for pure manual).
+            terminal_reward = float(composite) if composite is not None else 0.0
             return ToolOutput(
-                blocks=[TextBlock(type="text", text="\n".join(text_lines))],
-                reward=float(breakdown.composite),
+                blocks=[TextBlock(type="text", text=text_with_meta)],
+                reward=terminal_reward,
                 finished=True,
             )
 
@@ -252,10 +378,11 @@ class TriageBatchEnv(Environment):
                     text=(
                         f"Assigned {patient_id} -> KTAS {level} "
                         f"({KTAS_NAMES[level]}). {remaining} patient(s) remaining."
+                        + ("" if scored else " (unscored — manual entry)")
                     ),
                 )
             ],
-            reward=reward,
+            reward=per_tool_reward,
             finished=False,
         )
 

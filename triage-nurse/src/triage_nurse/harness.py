@@ -94,6 +94,7 @@ def run_task(
     started = _now_iso()
     cumulative_reward = 0.0
     composite_score: float | None = None  # reward of the terminal tool call
+    terminal_meta: dict[str, Any] | None = None  # parsed from final text
     status = "complete"
     turns = 0
     finished = False
@@ -186,6 +187,18 @@ def run_task(
                     if fin:
                         finished = True
                         composite_score = reward
+                        # The terminator (a successful submit) embeds a META
+                        # JSON below a delimiter so the harness can lift
+                        # per_patient_assignments + evaluation_summary into
+                        # result.json.
+                        from .triage_env import META_DELIMITER
+
+                        if META_DELIMITER in text:
+                            try:
+                                meta_json = text.split(META_DELIMITER, 1)[1]
+                                terminal_meta = json.loads(meta_json)
+                            except (ValueError, json.JSONDecodeError):
+                                terminal_meta = None
             else:
                 # while-else: fires when the while condition becomes false (not on break)
                 if not finished:
@@ -213,7 +226,7 @@ def run_task(
         score = max(0.0, min(1.0, cumulative_reward / max(1, turns)))
     else:
         score = 0.0
-    result = {
+    result: dict[str, Any] = {
         "episode_id": episode_id,
         "task_id": task_id,
         "model": model,
@@ -232,12 +245,51 @@ def run_task(
         "ended_at": _now_iso(),
         "max_turns": max_turns,
     }
+    # If the terminator embedded structured meta, lift it into result.json.
+    if terminal_meta is not None:
+        for key in (
+            "scored_count",
+            "manual_count",
+            "per_patient_assignments",
+            "evaluation_summary",
+        ):
+            if key in terminal_meta:
+                result[key] = terminal_meta[key]
+    else:
+        # Episode didn't reach the terminator — set explicit None placeholders
+        # so the UI knows there's no eval data.
+        result["scored_count"] = None
+        result["manual_count"] = None
+        result["per_patient_assignments"] = None
+        result["evaluation_summary"] = None
     result_path.write_text(json.dumps(result, indent=2))
     print(
         f"[harness] {episode_id} status={status} turns={turns} "
         f"reward={cumulative_reward:.3f} cost=£{cost_summary['total_gbp']:.4f}"
     )
     return result
+
+
+def _patient_preview(patient: Any) -> dict[str, Any]:
+    """Compact patient summary for the UI's pre-run preview pane."""
+    v = patient.vitals
+    return {
+        "id": patient.id,
+        "age": patient.age,
+        "sex": patient.sex,
+        "chief_complaint": patient.chief_complaint,
+        "mental_state": patient.mental_state,
+        "nrs_pain": patient.nrs_pain,
+        "vitals": {
+            "hr": v.hr,
+            "sbp": v.sbp,
+            "dbp": v.dbp,
+            "rr": v.rr,
+            "spo2": v.spo2,
+            "temp_c": v.temp_c,
+        },
+        "ground_truth_ktas": patient.ground_truth_ktas,
+    }
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -251,14 +303,80 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Print available tasks as JSON and exit. Does NOT need an LLM key or env server.",
     )
-    p.add_argument("--split", default="test", help="Split to list tasks from (default: test)")
+    p.add_argument(
+        "--split", default="test", help="Split to list tasks from (default: test)"
+    )
+    p.add_argument(
+        "--task-spec-file",
+        default=None,
+        help="Path to a JSON file containing a task spec; used in place of --task lookup.",
+    )
+    p.add_argument(
+        "--preview",
+        default=None,
+        help="Print a JSON preview of patients for the given taskId and exit.",
+    )
+    p.add_argument(
+        "--n",
+        type=int,
+        default=None,
+        help="Override the batch size for --preview / --list-tasks variants.",
+    )
     args = p.parse_args(argv)
 
     if args.list_tasks:
         from .triage_env import TriageBatchEnv
 
         tasks = TriageBatchEnv.list_tasks(args.split)
+        if args.n is not None:
+            # Reshape each task's row_indices to size n.
+            from . import dataset
+
+            for t in tasks:
+                seed = int(t.get("seed", 0))
+                rows = dataset.select_diverse_batch(seed=seed, n=args.n)
+                t["row_indices"] = rows
+                t["n"] = args.n
+                t["ground_truth_ktas"] = [
+                    dataset.load_row(i).ground_truth_ktas for i in rows
+                ]
         print(json.dumps(tasks, indent=2))
+        return 0
+
+    if args.preview is not None:
+        # Doesn't need an LLM key. Synthesize the patients deterministically
+        # from the same select_diverse_batch the env uses, plus any manual
+        # patients if a task-spec-file was also passed.
+        from . import dataset
+        from .triage_env import TriageBatchEnv
+
+        spec: dict[str, Any] | None = None
+        if args.task_spec_file:
+            spec = json.loads(Path(args.task_spec_file).read_text())
+        else:
+            for t in TriageBatchEnv.list_tasks(args.split):
+                if t.get("id") == args.preview:
+                    spec = dict(t)
+                    break
+        if spec is None:
+            print(
+                f"[harness] preview: task {args.preview!r} not found", file=sys.stderr
+            )
+            return 2
+        if args.n is not None:
+            seed = int(spec.get("seed", 0))
+            spec["row_indices"] = dataset.select_diverse_batch(seed=seed, n=args.n)
+            spec["n"] = args.n
+            spec["ground_truth_ktas"] = [
+                dataset.load_row(i).ground_truth_ktas for i in spec["row_indices"]
+            ]
+        # Build the env so the same patient construction logic runs.
+        env_local = TriageBatchEnv(task_spec=spec)
+        previews = [
+            _patient_preview(env_local.world.patients[pid])
+            for pid in env_local.world.patients
+        ]
+        print(json.dumps({"task_id": spec.get("id"), "patients": previews}, indent=2))
         return 0
 
     require_llm_key()
@@ -270,7 +388,29 @@ def main(argv: list[str] | None = None) -> int:
     env, name = _connect_env(client)
     print(f"[harness] connected to env: {name}")
 
-    tasks = env.list_tasks(split=args.split)
+    if args.task_spec_file:
+        # Ad-hoc task: load the spec from disk, wrap it in a Task object so
+        # the OpenReward client's session() context manager (which reads
+        # `task.task_spec`) accepts it.
+        from openreward.api.environments.types import Task as ORTask
+
+        adhoc_spec = json.loads(Path(args.task_spec_file).read_text())
+        # Borrow server/env names from any existing task so the Task object
+        # has the right deployment metadata. If list_tasks is empty we fall
+        # back to placeholders (the env class registers without them).
+        existing = env.list_tasks(split="test")
+        first = existing[0] if existing else None
+        adhoc_task = ORTask(
+            server_name=getattr(first, "server_name", name),
+            environment_name=getattr(first, "environment_name", name),
+            task_spec=adhoc_spec,
+            namespace=getattr(first, "namespace", None),
+        )
+        print(f"[harness] running ad-hoc task {adhoc_spec.get('id', '<unknown>')}")
+        run_task(env, adhoc_task, args.model, args.max_turns, output_dir)
+        return 0
+
+    tasks = env.list_tasks(split="test")
     if args.task != "all":
         tasks = [t for t in tasks if _task_spec(t).get("id") == args.task]
         if not tasks:

@@ -7,6 +7,30 @@ const RUNS_DIR = path.join(process.cwd(), "triage-nurse", "runs");
 
 type Params = Promise<{ id: string }>;
 
+type PerPatient = {
+  patient_id: string;
+  agent_level: number;
+  truth_level: number | null;
+  reward: number | null;
+  order: number;
+  scored: boolean;
+  source: "dataset" | "manual";
+  chief_complaint?: string;
+};
+
+type EvalSummary = {
+  scored_count: number;
+  exact_matches: number;
+  over_triage: number;
+  under_triage: number;
+  exact_rate: number;
+  mistriage_rate: number;
+  under_triage_rate: number;
+  off_by_one_count: number;
+  off_by_two_or_more_count: number;
+  confusion: Record<string, Record<string, number>>;
+};
+
 type Result = {
   episode_id: string;
   task_id: string;
@@ -15,6 +39,9 @@ type Result = {
   finished: boolean;
   status: string;
   total_reward: number;
+  composite_score?: number | null;
+  score?: number | null;
+  summary?: string | null;
   cost_usd: number;
   cost_gbp: number;
   calls: number;
@@ -22,6 +49,18 @@ type Result = {
   started_at: string;
   ended_at: string;
   max_turns: number;
+  scored_count?: number | null;
+  manual_count?: number | null;
+  per_patient_assignments?: PerPatient[] | null;
+  evaluation_summary?: EvalSummary | null;
+};
+
+const KTAS_NAMES: Record<number, string> = {
+  1: "immediate",
+  2: "very_urgent",
+  3: "urgent",
+  4: "standard",
+  5: "not_urgent",
 };
 
 type TrajectoryEvent =
@@ -119,6 +158,12 @@ export default async function EpisodePage({ params }: { params: Params }) {
               <dd className="font-mono">
                 £{result.cost_gbp.toFixed(4)} (${result.cost_usd.toFixed(4)})
               </dd>
+              <dt className="text-[var(--text-muted)]">Composite</dt>
+              <dd className="font-mono">
+                {result.composite_score != null
+                  ? result.composite_score.toFixed(3)
+                  : "(none — pure manual run)"}
+              </dd>
               <dt className="text-[var(--text-muted)]">Started</dt>
               <dd className="font-mono">{new Date(result.started_at).toLocaleString()}</dd>
               <dt className="text-[var(--text-muted)]">Ended</dt>
@@ -133,6 +178,77 @@ export default async function EpisodePage({ params }: { params: Params }) {
             </p>
           </div>
         )}
+
+        {result?.per_patient_assignments && result.per_patient_assignments.length > 0 ? (
+          <section className="rounded-2xl border border-border bg-surface p-4 shadow-sm">
+            <h2 className="text-[13px] font-semibold uppercase tracking-wide text-[var(--text-muted)]">
+              Evaluation
+            </h2>
+            {result.evaluation_summary ? (
+              <p className="mt-2 text-[12px] text-[var(--text-secondary)]">
+                Scored {result.scored_count} / {result.per_patient_assignments.length}
+                {" · "}exact {result.evaluation_summary.exact_matches}/
+                {result.evaluation_summary.scored_count} (
+                {(result.evaluation_summary.exact_rate * 100).toFixed(1)}%)
+                {" · "}mistriage{" "}
+                {(result.evaluation_summary.mistriage_rate * 100).toFixed(1)}%
+                {" · "}over {result.evaluation_summary.over_triage}
+                {" · "}under {result.evaluation_summary.under_triage}
+              </p>
+            ) : null}
+            <table className="mt-3 w-full text-[12px]">
+              <thead>
+                <tr className="text-left text-[var(--text-muted)]">
+                  <th className="py-1 pr-2 font-medium">Patient</th>
+                  <th className="py-1 pr-2 font-medium">Source</th>
+                  <th className="py-1 pr-2 font-medium">Truth</th>
+                  <th className="py-1 pr-2 font-medium">Agent</th>
+                  <th className="py-1 pr-2 font-medium">Δ</th>
+                  <th className="py-1 pr-2 font-medium">Reward</th>
+                </tr>
+              </thead>
+              <tbody>
+                {result.per_patient_assignments.map((a) => {
+                  const delta =
+                    a.truth_level != null
+                      ? a.agent_level === a.truth_level
+                        ? "exact"
+                        : a.agent_level < a.truth_level
+                          ? `+${a.truth_level - a.agent_level} over`
+                          : `−${a.agent_level - a.truth_level} UNDER`
+                      : "—";
+                  return (
+                    <tr key={a.patient_id} className="border-t border-border">
+                      <td className="py-1 pr-2 font-mono">{a.patient_id}</td>
+                      <td className="py-1 pr-2 text-[var(--text-muted)]">
+                        {a.source}
+                        {a.scored ? "" : " · unscored"}
+                      </td>
+                      <td className="py-1 pr-2 font-mono">
+                        {a.truth_level != null
+                          ? `${a.truth_level} (${KTAS_NAMES[a.truth_level]})`
+                          : "—"}
+                      </td>
+                      <td className="py-1 pr-2 font-mono">
+                        {a.agent_level} ({KTAS_NAMES[a.agent_level]})
+                      </td>
+                      <td className="py-1 pr-2 font-mono">{delta}</td>
+                      <td className="py-1 pr-2 font-mono">
+                        {a.reward != null ? a.reward.toFixed(2) : "—"}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            {result.evaluation_summary ? (
+              <p className="mt-3 text-[11px] italic text-[var(--text-muted)]">
+                Vs. nurse panel on this dataset (Moon et al. 2019): mistriage
+                rate 14.7%, of which 70.4% were under-triage.
+              </p>
+            ) : null}
+          </section>
+        ) : null}
 
         <section className="rounded-2xl border border-border bg-surface p-4 shadow-sm">
           <h2 className="text-[13px] font-semibold uppercase tracking-wide text-[var(--text-muted)]">

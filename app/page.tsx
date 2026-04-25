@@ -14,6 +14,8 @@ import type {
   Decision,
   LiveTaskOption,
   Message,
+  RunRequest,
+  Severity,
   ThinkingStep,
 } from "@/lib/triage/types";
 
@@ -109,11 +111,35 @@ export default function TriageLabPage() {
   );
 
   const handleSubmit = useCallback(
-    async (scenario: string) => {
+    async (request: RunRequest) => {
       const userId = makeId();
       const agentId = makeId();
       const now = Date.now();
-      const nextHistory = [...history, scenario];
+
+      // Synthesize a user-facing description of what's being run for the
+      // chat bubble + loading thinking steps.
+      let scenario = "";
+      let taskLabel: string | undefined;
+      if (request.mode === "test") {
+        const task = tasks.find((t) => t.id === request.taskId) ?? null;
+        taskLabel = task?.label;
+        scenario =
+          `Test batch ${request.taskId} (${request.batchSize} patient${
+            request.batchSize === 1 ? "" : "s"
+          })` +
+          (request.extraPatient
+            ? ` + intake-note patient: "${request.extraPatient}"`
+            : "");
+      } else if (request.mode === "manual-single") {
+        taskLabel = "Manual single";
+        scenario = request.patient.chiefComplaint;
+      } else {
+        taskLabel = `Manual multi (${request.patients.length})`;
+        scenario = request.patients
+          .map((p, i) => `${i + 1}. ${p.chiefComplaint}`)
+          .join("\n");
+      }
+      const loadingSteps = buildLoadingThinkingSteps(taskLabel, scenario);
 
       setMessages((prev) => [
         ...prev,
@@ -122,6 +148,8 @@ export default function TriageLabPage() {
           role: "user",
           scenario,
           environment: "clinical",
+          taskId: request.mode === "test" ? request.taskId : undefined,
+          taskLabel,
           createdAt: now,
         },
         {
@@ -152,7 +180,7 @@ export default function TriageLabPage() {
         const assessResponse = await fetch("/api/triage/assess", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ history: nextHistory }),
+          body: JSON.stringify(request),
         });
         const assessPayload = (await assessResponse.json()) as AssessResponse & { error?: string };
         if (!assessResponse.ok) {

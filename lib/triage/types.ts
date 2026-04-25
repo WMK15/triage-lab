@@ -46,21 +46,67 @@ export type IntakeSuggestion = {
   score: number;
 };
 
-export type AssessResponse =
+// ---- v3: multi-mode input ----------------------------------------------
+
+export type RunMode = "test" | "manual-single" | "manual-multi";
+
+export type KtasLevel = 1 | 2 | 3 | 4 | 5;
+
+export type MentalState = "alert" | "verbal" | "pain" | "unresponsive";
+
+/** A user-entered patient. Free text required; everything else optional.
+ * If fields are filled in, they take precedence over what regex extracts
+ * from `chiefComplaint`. */
+export type ManualPatient = {
+  chiefComplaint: string;
+  age?: number | null;
+  sex?: "M" | "F" | null;
+  vitals?: {
+    hr?: number | null;
+    sbp?: number | null;
+    dbp?: number | null;
+    rr?: number | null;
+    spo2?: number | null;
+    tempC?: number | null;
+  } | null;
+  mentalState?: MentalState | null;
+  nrsPain?: number | null;
+  expectedKtas?: KtasLevel | null; // when set, becomes ground truth → scored
+};
+
+/** A patient as shown in the pre-run preview pane — what the env will load. */
+export type PatientPreview = {
+  id: string;
+  age: number;
+  sex: "M" | "F";
+  chief_complaint: string;
+  mental_state: MentalState;
+  nrs_pain: number | null;
+  vitals: {
+    hr: number;
+    sbp: number;
+    dbp: number;
+    rr: number;
+    spo2: number;
+    temp_c: number;
+  };
+  ground_truth_ktas: KtasLevel | null;
+};
+
+export type RunRequest =
   | {
-      kind: "question";
-      question: string;
-      summary: string;
-      matchedCase: IntakeSuggestion | null;
-      thinking: ThinkingStep[];
+      mode: "test";
+      taskId: string;
+      batchSize: number;
+      extraPatient?: string; // Option C: optional intake-note patient (unscored)
     }
   | {
-      kind: "decision";
-      decision: Decision;
-      actions: Action[];
-      acknowledgement: string;
-      matchedCase: IntakeSuggestion | null;
-      thinking: ThinkingStep[];
+      mode: "manual-single";
+      patient: ManualPatient;
+    }
+  | {
+      mode: "manual-multi";
+      patients: ManualPatient[];
     };
 
 export type UserMessage = {
