@@ -1,0 +1,28 @@
+default:
+    @just --list
+
+install:
+    uv venv --python 3.11
+    uv pip install -e ".[dev]"
+
+serve-env:
+    uv run python -m triage_nurse.triage_env
+
+run-harness:
+    uv run python -m triage_nurse.harness
+
+run-demo:
+    uv run python scripts/run_demo.py
+
+test:
+    uv run pytest
+
+lint:
+    uv run ruff check src/ tests/
+
+format:
+    uv run ruff format src/ tests/
+
+clean:
+    rm -rf .venv __pycache__ .pytest_cache .ruff_cache
+    find runs -mindepth 1 ! -name '.gitkeep' -exec rm -rf {} +
