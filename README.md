@@ -1,4 +1,4 @@
-# Triage Lab
+# 🩺 Triage Lab
 
 [![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=nextdotjs)](https://nextjs.org/)
 [![React](https://img.shields.io/badge/React-19-20232A?logo=react)](https://react.dev/)
