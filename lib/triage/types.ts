@@ -46,6 +46,28 @@ export type IntakeSuggestion = {
   score: number;
 };
 
+export type AssessResponse =
+  | {
+      kind: "question";
+      question: string;
+      summary: string;
+      matchedCase: IntakeSuggestion | null;
+      thinking: ThinkingStep[];
+    }
+  | {
+      kind: "decision";
+      decision: Decision;
+      actions: Action[];
+      acknowledgement: string;
+      matchedCase: IntakeSuggestion | null;
+      thinking: ThinkingStep[];
+    };
+
+export type ChatAssessRequest = {
+  mode: "chat";
+  text: string;
+};
+
 // ---- v3: multi-mode input ----------------------------------------------
 
 export type RunMode = "test" | "manual-single" | "manual-multi";

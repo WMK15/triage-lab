@@ -591,9 +591,7 @@ def synthesize_manual_patient(payload: dict, idx: int) -> Patient:
     # Mental state
     mental_raw = payload.get("mental_state")
     mental: MentalState = (
-        mental_raw
-        if mental_raw in ("alert", "verbal", "pain", "unresponsive")
-        else "alert"
+        mental_raw if mental_raw in ("alert", "verbal", "pain", "unresponsive") else "alert"
     )
 
     # NRS pain
@@ -642,7 +640,7 @@ def synthesize_manual_patient(payload: dict, idx: int) -> Patient:
     )
 
 
-def select_diverse_batch(seed: int, n: int = 5) -> list[int]:
+def select_diverse_batch(seed: int, n: int = 5, split: str | None = None) -> list[int]:
     """Return n CSV row indices with at least one KTAS 1-2 and at least one
     KTAS 4-5. Deterministic given seed.
 

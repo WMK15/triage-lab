@@ -5,17 +5,25 @@ import crypto from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 
 import type {
+  Action,
+  AssessResponse,
   IntakeSuggestion,
   LiveTaskOption,
   ManualPatient,
   PatientPreview,
   RunRequest,
+  Severity,
+  ThinkingStep,
+  Decision,
 } from "@/lib/triage/types";
 
 const ROOT = process.cwd();
 const TRIAGE_NURSE_DIR = path.join(ROOT, "triage-nurse");
 const RUNS_DIR = path.join(TRIAGE_NURSE_DIR, "runs");
+const COMBINED_TRIAGE_REFERENCE_CSV = path.join(ROOT, "dataset", "combined-triage-reference.csv");
 const DATASET_CSV = path.join(ROOT, "dataset", "emergency-triage.csv");
+const SYMPTOM_REFERENCE_CSV = path.join(ROOT, "dataset", "symptom-triage-reference.csv");
+const ED_TRIAGE_CSV = path.join(ROOT, "dataset", "ed", "triage.csv");
 const TRIAGE_NURSE_ENV_FILE = path.join(TRIAGE_NURSE_DIR, ".env");
 const ENV_URL = "http://127.0.0.1:8080";
 const ENV_PING_TIMEOUT_MS = 1500;
@@ -65,6 +73,9 @@ type DatasetRow = {
   chiefComplaint: string;
   diagnosis: string;
   taskId: string;
+  referenceLevel: number | null;
+  highAcuity: boolean;
+  source: "ktas" | "symptom_reference" | "ed_triage";
 };
 
 type IntakeAssessment = {
@@ -147,9 +158,105 @@ function normaliseText(text: string): string {
   return text.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
 }
 
-function parseCsvLine(line: string): string[] {
-  return line.split(";");
+function parseDelimitedLine(line: string, delimiter: string): string[] {
+  const values: string[] = [];
+  let current = "";
+  let inQuotes = false;
+
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    if (char === '"') {
+      if (inQuotes && line[index + 1] === '"') {
+        current += '"';
+        index += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+
+    if (char === delimiter && !inQuotes) {
+      values.push(current.trim());
+      current = "";
+      continue;
+    }
+
+    current += char;
+  }
+
+  values.push(current.trim());
+  return values;
 }
+
+function readDelimitedRows(
+  filePath: string,
+  delimiter: string,
+  encoding: BufferEncoding = "utf-8",
+): { headers: string[]; rows: string[][] } {
+  if (!fs.existsSync(filePath)) {
+    return { headers: [], rows: [] };
+  }
+
+  const raw = fs.readFileSync(filePath, encoding);
+  const [headerLine, ...lines] = raw.split(/\r?\n/).filter((line) => line.trim().length > 0);
+  if (!headerLine) {
+    return { headers: [], rows: [] };
+  }
+
+  return {
+    headers: parseDelimitedLine(headerLine, delimiter),
+    rows: lines.map((line) => parseDelimitedLine(line, delimiter)),
+  };
+}
+
+const QUERY_ALIAS_RULES = [
+  {
+    patterns: [/\bheart attack\b/, /\bmyocardial infarction\b/, /\bmi\b/],
+    phrases: [
+      "acute severe chest pain",
+      "chest pain radiating to jaw arm back",
+      "shortness of breath",
+      "acute coronary syndrome",
+    ],
+  },
+  {
+    patterns: [/\bstroke\b/, /\bfacial droop\b/, /\bslurred speech\b/, /\bspeech difficulty\b/],
+    phrases: [
+      "sudden focal neurological deficit",
+      "facial droop",
+      "arm weakness",
+      "speech difficulty",
+      "vision loss acute",
+    ],
+  },
+  {
+    patterns: [
+      /\bshortness of breath\b/,
+      /\btrouble breathing\b/,
+      /\bcannot breathe\b/,
+      /\bcan t breathe\b/,
+      /\bsob\b/,
+      /\bdyspnea\b/,
+    ],
+    phrases: ["severe dyspnea at rest", "shortness of breath", "respiratory distress"],
+  },
+  {
+    patterns: [/\bfainting\b/, /\bfainted\b/, /\bpassed out\b/, /\bsyncope\b/],
+    phrases: ["syncope", "loss of consciousness"],
+  },
+  {
+    patterns: [/\bvomiting blood\b/, /\bthrowing up blood\b/, /\bhematemesis\b/],
+    phrases: ["hematemesis", "vomiting blood", "upper gi bleed"],
+  },
+  {
+    patterns: [/\bseizure\b/, /\bconvulsion\b/],
+    phrases: ["seizure active or post ictal"],
+  },
+  {
+    patterns: [/\bconfused\b/, /\baltered mental status\b/, /\bnot acting right\b/],
+    phrases: ["acute altered mental status"],
+  },
+];
 
 let liveTasksCache: LiveTaskOption[] | null = null;
 
@@ -203,30 +310,260 @@ export function listLiveTasks(): LiveTaskOption[] {
 
 let datasetCache: DatasetRow[] | null = null;
 
+function taskIdForIndex(index: number): string {
+  const taskIds = listLiveTasks().map((task) => task.id);
+  if (taskIds.length === 0) return `dataset-row-${index}`;
+  return taskIds[index % taskIds.length];
+}
+
+function appendAliasPhrases(query: string): string {
+  const additions = QUERY_ALIAS_RULES.flatMap((rule) =>
+    rule.patterns.some((pattern) => pattern.test(query)) ? rule.phrases : [],
+  );
+  return additions.length > 0 ? `${query} ${additions.join(" ")}` : query;
+}
+
+function expandedIntakeText(history: string[]): string {
+  return appendAliasPhrases(normaliseText(history.join(" ")));
+}
+
+function assessmentFromLevel(level: number, rationale: string): IntakeAssessment {
+  if (level <= 1) {
+    return {
+      severity: "critical",
+      headline: "Immediate triage required",
+      rationale,
+      progress: 100,
+      actions: [
+        {
+          id: "critical-bed",
+          label: "Move to resuscitation bay",
+          description: "Do not keep this patient in the waiting room.",
+          intent: "escalation",
+        },
+        {
+          id: "critical-team",
+          label: "Alert senior clinician",
+          description: "Immediate bedside assessment is warranted.",
+          intent: "escalation",
+        },
+        {
+          id: "critical-monitor",
+          label: "Start continuous monitoring",
+          description: "Track vitals while urgent treatment starts.",
+        },
+      ],
+    };
+  }
+
+  if (level === 2) {
+    return {
+      severity: "high",
+      headline: "Very urgent triage",
+      rationale,
+      progress: 90,
+      actions: [
+        {
+          id: "high-room",
+          label: "Place in monitored bed",
+          description: "Keep the patient where repeat observations are easy.",
+          intent: "escalation",
+        },
+        {
+          id: "high-obs",
+          label: "Repeat vitals now",
+          description: "Recheck objective instability before clinician review.",
+        },
+        {
+          id: "high-escalate",
+          label: "Escalate to urgent review",
+          description: "Prioritize medical assessment over standard queue order.",
+          intent: "constructive",
+        },
+      ],
+    };
+  }
+
+  if (level === 3) {
+    return {
+      severity: "moderate",
+      headline: "Urgent triage",
+      rationale,
+      progress: 78,
+      actions: [
+        {
+          id: "moderate-zone",
+          label: "Keep in urgent queue",
+          description: "Move ahead of routine complaints but without resuscitation-level response.",
+          intent: "constructive",
+        },
+        {
+          id: "moderate-analgesia",
+          label: "Start comfort measures",
+          description: "Offer early pain control, hydration, or wound care if appropriate.",
+        },
+        {
+          id: "moderate-watch",
+          label: "Watch for deterioration",
+          description: "Upgrade priority if symptoms worsen or new red flags appear.",
+        },
+      ],
+    };
+  }
+
+  return {
+    severity: "low",
+    headline: "Standard triage",
+    rationale,
+    progress: 65,
+    actions: [
+      {
+        id: "low-queue",
+        label: "Keep in standard queue",
+        description: "Routine review appears reasonable based on the current description.",
+      },
+      {
+        id: "low-safety-net",
+        label: "Give return precautions",
+        description: "Advise the patient to report worsening pain, breathing issues, or collapse.",
+      },
+      {
+        id: "low-refresh",
+        label: "Recheck if waiting extends",
+        description: "Repeat the screen if new symptoms develop while waiting.",
+      },
+    ],
+  };
+}
+
+function strongestReferenceMatch(query: string): DatasetRow | null {
+  let best: { row: DatasetRow; level: number; score: number } | null = null;
+
+  for (const row of loadDatasetRows()) {
+    if (row.referenceLevel === null) continue;
+    const complaintScore = overlapScore(query, row.chiefComplaint);
+    const diagnosisScore = overlapScore(query, row.diagnosis);
+    const score = Math.max(complaintScore, diagnosisScore * 0.9);
+    if (score < 0.2) continue;
+
+    const level = row.referenceLevel;
+    if (
+      best === null ||
+      level < best.level ||
+      (level === best.level && score > best.score)
+    ) {
+      best = { row, level, score };
+    }
+  }
+
+  return best?.row ?? null;
+}
+
+function hasImmediateRedFlags(text: string): boolean {
+  return mentionsAny(text, [
+    "heart attack",
+    "acute severe chest pain",
+    "chest pain radiating",
+    "shortness of breath",
+    "severe dyspnea",
+    "cannot breathe",
+    "stroke",
+    "facial droop",
+    "arm weakness",
+    "speech difficulty",
+    "loss of consciousness",
+    "syncope",
+    "hematemesis",
+    "vomiting blood",
+    "acute altered mental status",
+    "sudden focal neurological deficit",
+  ]);
+}
+
 function loadDatasetRows(): DatasetRow[] {
   if (datasetCache) return datasetCache;
-  if (!fs.existsSync(DATASET_CSV)) return [];
 
-  const raw = fs.readFileSync(DATASET_CSV, "latin1");
-  const [headerLine, ...lines] = raw.split(/\r?\n/).filter((line) => line.trim().length > 0);
-  const headers = parseCsvLine(headerLine);
-  const chiefIndex = headers.indexOf("Chief_complain");
-  const diagnosisIndex = headers.indexOf("Diagnosis in ED");
+  if (fs.existsSync(COMBINED_TRIAGE_REFERENCE_CSV)) {
+    const combined = readDelimitedRows(COMBINED_TRIAGE_REFERENCE_CSV, ",");
+    const sourceIndex = combined.headers.indexOf("source");
+    const chiefIndex = combined.headers.indexOf("chief_complaint");
+    const diagnosisIndex = combined.headers.indexOf("diagnosis");
+    const levelIndex = combined.headers.indexOf("reference_level");
+    const highIndex = combined.headers.indexOf("high_acuity");
 
-  const taskIds = listLiveTasks().map((task) => task.id);
-  if (taskIds.length === 0) {
-    datasetCache = [];
+    datasetCache = combined.rows.map((cols, index) => {
+      const level = Number.parseInt(cols[levelIndex] ?? "", 10) || null;
+      const source = cols[sourceIndex];
+      return {
+        chiefComplaint: cols[chiefIndex] ?? "",
+        diagnosis: cols[diagnosisIndex] ?? "",
+        taskId: taskIdForIndex(index),
+        referenceLevel: level,
+        highAcuity: (cols[highIndex] ?? "").toLowerCase() === "yes" || (level !== null && level <= 2),
+        source:
+          source === "symptom_reference" || source === "ed_triage" ? source : "ktas",
+      } satisfies DatasetRow;
+    });
+
     return datasetCache;
   }
 
-  datasetCache = lines.map((line, index) => {
-    const cols = parseCsvLine(line);
+  const primary = readDelimitedRows(DATASET_CSV, ";", "latin1");
+  const symptomReference = readDelimitedRows(SYMPTOM_REFERENCE_CSV, ",");
+  const edTriage = readDelimitedRows(ED_TRIAGE_CSV, ",");
+
+  const primaryChiefIndex = primary.headers.indexOf("Chief_complain");
+  const primaryDiagnosisIndex = primary.headers.indexOf("Diagnosis in ED");
+  const primaryKtasIndex = primary.headers.indexOf("KTAS_expert");
+
+  const primaryRows = primary.rows.map((cols, index) => ({
+    chiefComplaint: cols[primaryChiefIndex] ?? "",
+    diagnosis: cols[primaryDiagnosisIndex] ?? "",
+    taskId: taskIdForIndex(index),
+    referenceLevel: Number.parseInt(cols[primaryKtasIndex] ?? "", 10) || null,
+    highAcuity: [1, 2].includes(Number.parseInt(cols[primaryKtasIndex] ?? "", 10)),
+    source: "ktas",
+  })) satisfies DatasetRow[];
+
+  const symptomNameIndex = symptomReference.headers.indexOf("symptom_name");
+  const symptomLevelIndex = symptomReference.headers.indexOf("typical_triage_level");
+  const symptomRuleOutIndex = symptomReference.headers.indexOf("must_rule_out");
+  const symptomModifierIndex = symptomReference.headers.indexOf("high_acuity_modifier");
+
+  const symptomRows = symptomReference.rows.map((cols, index) => {
+    const level = Number.parseInt(cols[symptomLevelIndex] ?? "", 10) || null;
+    const symptom = cols[symptomNameIndex] ?? "";
+    const ruleOut = cols[symptomRuleOutIndex] ?? "";
     return {
-      chiefComplaint: cols[chiefIndex] ?? "",
-      diagnosis: cols[diagnosisIndex] ?? "",
-      taskId: taskIds[index % taskIds.length],
+      chiefComplaint: symptom,
+      diagnosis: ruleOut || symptom,
+      taskId: taskIdForIndex(primaryRows.length + index),
+      referenceLevel: level,
+      highAcuity:
+        cols[symptomModifierIndex]?.toLowerCase() === "yes" || (level !== null && level <= 2),
+      source: "symptom_reference",
     } satisfies DatasetRow;
   });
+
+  const edComplaintIndex = edTriage.headers.indexOf("chiefcomplaint");
+  const edAcuityIndex = edTriage.headers.indexOf("acuity");
+
+  const edRows = edTriage.rows.map((cols, index) => {
+    const acuity = Number.parseInt(cols[edAcuityIndex] ?? "", 10) || null;
+    const complaint = cols[edComplaintIndex] ?? "";
+    return {
+      chiefComplaint: complaint,
+      diagnosis: complaint,
+      taskId: taskIdForIndex(primaryRows.length + symptomRows.length + index),
+      referenceLevel: acuity,
+      highAcuity: acuity !== null && acuity <= 2,
+      source: "ed_triage",
+    } satisfies DatasetRow;
+  });
+
+  datasetCache = [...primaryRows, ...symptomRows, ...edRows].filter(
+    (row) => row.chiefComplaint || row.diagnosis,
+  );
 
   return datasetCache;
 }
@@ -286,7 +623,15 @@ function mentionsAny(text: string, terms: string[]): boolean {
 }
 
 function extractAssessment(history: string[]): IntakeAssessment {
-  const combined = normaliseText(history.join(" "));
+  const combined = expandedIntakeText(history);
+  const referenceMatch = strongestReferenceMatch(combined);
+
+  if (referenceMatch?.referenceLevel) {
+    return assessmentFromLevel(
+      referenceMatch.referenceLevel,
+      `The reported symptoms match a high-priority triage pattern (${referenceMatch.chiefComplaint.toLowerCase()}) and should be escalated accordingly.`,
+    );
+  }
 
   const severeDanger = mentionsAny(combined, [
     "not breathing",
@@ -298,38 +643,25 @@ function extractAssessment(history: string[]): IntakeAssessment {
     "cannot breathe",
   ]);
   if (severeDanger) {
-    return {
-      severity: "critical",
-      headline: "Immediate triage required",
-      rationale:
-        "The symptoms suggest an immediate threat to airway, breathing, circulation, or neurologic status.",
-      progress: 100,
-      actions: [
-        {
-          id: "critical-bed",
-          label: "Move to resuscitation bay",
-          description: "Do not keep this patient in the waiting room.",
-          intent: "escalation",
-        },
-        {
-          id: "critical-team",
-          label: "Alert senior clinician",
-          description: "Immediate bedside assessment is warranted.",
-          intent: "escalation",
-        },
-        {
-          id: "critical-monitor",
-          label: "Start continuous monitoring",
-          description: "Track vitals while urgent treatment starts.",
-        },
-      ],
-    };
+    return assessmentFromLevel(
+      1,
+      "The symptoms suggest an immediate threat to airway, breathing, circulation, or neurologic status.",
+    );
   }
 
   const highRisk = mentionsAny(combined, [
+    "heart attack",
     "chest pain",
+    "chest tightness",
+    "chest pressure",
     "shortness of breath",
+    "jaw pain",
+    "arm pain",
+    "radiating pain",
     "weakness one side",
+    "facial droop",
+    "speech difficulty",
+    "slurred speech",
     "stroke",
     "confused",
     "severe pain",
@@ -337,34 +669,15 @@ function extractAssessment(history: string[]): IntakeAssessment {
     "pregnant bleeding",
     "anaphylaxis",
     "high fever and rash",
+    "passed out",
+    "fainted",
+    "syncope",
   ]);
   if (highRisk) {
-    return {
-      severity: "high",
-      headline: "Very urgent triage",
-      rationale:
-        "These features can deteriorate quickly and should be assessed ahead of routine waiting-room complaints.",
-      progress: 90,
-      actions: [
-        {
-          id: "high-room",
-          label: "Place in monitored bed",
-          description: "Keep the patient where repeat observations are easy.",
-          intent: "escalation",
-        },
-        {
-          id: "high-obs",
-          label: "Repeat vitals now",
-          description: "Recheck objective instability before clinician review.",
-        },
-        {
-          id: "high-escalate",
-          label: "Escalate to urgent review",
-          description: "Prioritize medical assessment over standard queue order.",
-          intent: "constructive",
-        },
-      ],
-    };
+    return assessmentFromLevel(
+      2,
+      "These features can deteriorate quickly and should be assessed ahead of routine waiting-room complaints.",
+    );
   }
 
   const moderateRisk = mentionsAny(combined, [
@@ -379,57 +692,16 @@ function extractAssessment(history: string[]): IntakeAssessment {
     "headache",
   ]);
   if (moderateRisk) {
-    return {
-      severity: "moderate",
-      headline: "Urgent triage",
-      rationale:
-        "The complaint appears significant but does not currently show the strongest immediate red-flag features.",
-      progress: 78,
-      actions: [
-        {
-          id: "moderate-zone",
-          label: "Keep in urgent queue",
-          description: "Move ahead of routine complaints but without resuscitation-level response.",
-          intent: "constructive",
-        },
-        {
-          id: "moderate-analgesia",
-          label: "Start comfort measures",
-          description: "Offer early pain control, hydration, or wound care if appropriate.",
-        },
-        {
-          id: "moderate-watch",
-          label: "Watch for deterioration",
-          description: "Upgrade priority if symptoms worsen or new red flags appear.",
-        },
-      ],
-    };
+    return assessmentFromLevel(
+      3,
+      "The complaint appears significant but does not currently show the strongest immediate red-flag features.",
+    );
   }
 
-  return {
-    severity: "low",
-    headline: "Standard triage",
-    rationale:
-      "The available details fit a lower-acuity presentation that can usually wait for standard assessment.",
-    progress: 65,
-    actions: [
-      {
-        id: "low-queue",
-        label: "Keep in standard queue",
-        description: "Routine review appears reasonable based on the current description.",
-      },
-      {
-        id: "low-safety-net",
-        label: "Give return precautions",
-        description: "Advise the patient to report worsening pain, breathing issues, or collapse.",
-      },
-      {
-        id: "low-refresh",
-        label: "Recheck if waiting extends",
-        description: "Repeat the screen if new symptoms develop while waiting.",
-      },
-    ],
-  };
+  return assessmentFromLevel(
+    4,
+    "The available details fit a lower-acuity presentation that can usually wait for standard assessment.",
+  );
 }
 
 const FOLLOW_UP_QUESTIONS = [
@@ -454,7 +726,15 @@ function nextFollowUpQuestion(history: string[]): string | null {
   if (history.length === 0) return null;
   if (history.length >= 3) return null;
 
-  const combined = normaliseText(history.join(" "));
+  const combined = expandedIntakeText(history);
+  const referenceMatch = strongestReferenceMatch(combined);
+  if (referenceMatch && referenceMatch.referenceLevel !== null && referenceMatch.referenceLevel <= 2) {
+    return null;
+  }
+  if (hasImmediateRedFlags(combined)) {
+    return null;
+  }
+
   const asked = history.length - 1;
   const candidate = FOLLOW_UP_QUESTIONS.find((item, index) => {
     if (index < asked) return false;
@@ -506,12 +786,19 @@ export function suggestCasesFromIntake(input: string): IntakeSuggestion[] {
   const query = input.trim();
   if (!query) return [];
 
+  const expandedQuery = appendAliasPhrases(normaliseText(query));
   const tasksById = new Map(listLiveTasks().map((task) => [task.id, task]));
   return loadDatasetRows()
     .map((row) => {
-      const complaintScore = overlapScore(query, row.chiefComplaint);
-      const diagnosisScore = overlapScore(query, row.diagnosis);
-      const score = Math.max(complaintScore, diagnosisScore * 0.9);
+      const complaintScore = overlapScore(expandedQuery, row.chiefComplaint);
+      const diagnosisScore = overlapScore(expandedQuery, row.diagnosis);
+      const sourceBoost =
+        row.source === "symptom_reference" ? 0.18 : row.source === "ed_triage" ? 0.12 : 0;
+      const acuityBoost = row.highAcuity ? 0.2 : 0;
+      const score = Math.min(
+        1,
+        Math.max(complaintScore, diagnosisScore * 0.9) + sourceBoost + acuityBoost,
+      );
       const task = tasksById.get(row.taskId);
       return {
         taskId: row.taskId,
@@ -775,7 +1062,7 @@ export async function runLiveEpisode(
   request: RunRequest,
 ): Promise<{ episodeId: string }> {
   await ensureEnvServer();
-  const model = configuredAgentModel();
+  configuredAgentModel();
 
   const before = new Set(
     fs.existsSync(RUNS_DIR)
