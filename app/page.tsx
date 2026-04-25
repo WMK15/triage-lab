@@ -9,11 +9,13 @@ import { EmptyState } from "@/components/triage/empty-state";
 import { InputPanel } from "@/components/triage/input-panel";
 import { UserMessage } from "@/components/triage/user-message";
 import type {
-  Action,
   AgentMessage as AgentMessageData,
   AssessResponse,
   ChatAssessRequest,
   Decision,
+  EvaluationAssignment,
+  EvaluationDetails,
+  EvaluationSummary,
   LiveTaskOption,
   Message,
   RunRequest,
@@ -29,6 +31,8 @@ type EpisodePayload = {
   trajectory: Array<Record<string, unknown>>;
   rewards: Array<Record<string, unknown>>;
 };
+
+const META_DELIMITER = "\n--META--\n";
 
 function makeId() {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
@@ -56,8 +60,30 @@ function buildThinking(trajectory: EpisodePayload["trajectory"]): ThinkingStep[]
     .map((event, index) => ({
       id: `${String(event.tool ?? "step")}-${index}`,
       label: String(event.tool ?? "step").replaceAll("_", " "),
-      detail: String(event.text ?? "No output returned."),
+      detail: String(event.text ?? "No output returned.").split(META_DELIMITER, 1)[0].trim(),
     }));
+}
+
+function parseNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function parseEvaluation(episode: EpisodePayload): EvaluationDetails | null {
+  const result = episode.result ?? {};
+  const assignments = Array.isArray(result.per_patient_assignments)
+    ? (result.per_patient_assignments as EvaluationAssignment[])
+    : [];
+  if (assignments.length === 0) return null;
+
+  return {
+    compositeScore: parseNumber(result.composite_score),
+    baseReward: parseNumber(result.base_reward),
+    orderingBonus: parseNumber(result.ordering_bonus),
+    scoredCount: typeof result.scored_count === "number" ? result.scored_count : 0,
+    manualCount: typeof result.manual_count === "number" ? result.manual_count : 0,
+    assignments,
+    summary: (result.evaluation_summary as EvaluationSummary | null) ?? null,
+  };
 }
 
 function buildLoadingThinkingSteps(
@@ -127,51 +153,12 @@ function buildDecision(episode: EpisodePayload): Decision {
   };
 }
 
-function buildActions(episode: EpisodePayload): Action[] {
-  const result = episode.result ?? {};
-  const task =
-    typeof result.task_id === "string"
-      ? result.task_id
-      : typeof result.task === "string"
-        ? result.task
-        : episode.id;
-  const score =
-    typeof result.score === "number"
-      ? result.score
-      : typeof result.total_reward === "number"
-        ? result.total_reward
-        : 0;
-  const status = typeof result.status === "string" ? result.status : "complete";
-
-  return [
-    {
-      id: `${episode.id}-episode`,
-      label: "Review episode log",
-      description: `Inspect ${task} in the episodes archive.`,
-      intent: "default",
-    },
-    {
-      id: `${episode.id}-rerun`,
-      label: score >= 1 ? "Run adjacent case" : "Re-run with tighter note",
-      description:
-        score >= 1
-          ? "Shift run completed cleanly; compare against another dataset-matched case."
-          : `Use a sharper operator note and compare the new rollout for ${task}.`,
-      intent: "constructive",
-    },
-    {
-      id: `${episode.id}-handoff`,
-      label: `Inspect ${status} result`,
-      description: "Open the detailed episode view to inspect the full multi-patient shift trace.",
-      intent: status === "capped" ? "escalation" : "default",
-    },
-  ];
-}
-
 function buildAcknowledgement(episode: EpisodePayload): string | null {
   const result = episode.result ?? {};
+  const summary = typeof result.summary === "string" ? result.summary : null;
+  if (summary) return summary;
   const status = typeof result.status === "string" ? result.status : null;
-  return status ? `Live shift run finished with status ${status}.` : null;
+  return status ? `The triage run finished with status ${status}.` : null;
 }
 
 function asKtasLevel(value: unknown): TriageClassification["agentLevel"] | null {
@@ -219,8 +206,7 @@ function messageFromEpisode(messageId: string, episode: EpisodePayload): AgentMe
     thinking: buildThinking(episode.trajectory),
     decision: buildDecision(episode),
     triageClassifications: buildTriageClassifications(episode.result),
-    actions: buildActions(episode),
-    selectedActionId: episode.id ? `${episode.id}-episode` : null,
+    evaluation: parseEvaluation(episode),
     acknowledgement: buildAcknowledgement(episode),
     createdAt: Date.now(),
   };
@@ -233,17 +219,6 @@ function intakePrompt(assessment: Extract<AssessResponse, { kind: "question" }>)
     severity: "moderate",
     caseProgress: 35,
   };
-}
-
-function intakeActions(): Action[] {
-  return [
-    {
-      id: "answer-follow-up",
-      label: "Answer follow-up",
-      description: "Reply with the missing detail so the case can be triaged.",
-      intent: "constructive",
-    },
-  ];
 }
 
 function backgroundThinking(taskLabel: string | null): ThinkingStep {
@@ -348,8 +323,7 @@ export default function TriageLabPage() {
               },
             ],
             decision: null,
-            actions: [],
-            selectedActionId: null,
+            evaluation: null,
             acknowledgement: null,
             createdAt: now,
           },
@@ -385,9 +359,8 @@ export default function TriageLabPage() {
                         backgroundThinking(matchedTaskLabel),
                       ],
                       decision: intakePrompt(assessPayload),
-                      actions: intakeActions(),
-                      selectedActionId: null,
-                      acknowledgement: null,
+                      evaluation: null,
+                      acknowledgement: "Reply in the composer below so the case can be triaged.",
                     }
                   : message,
               ),
@@ -405,8 +378,7 @@ export default function TriageLabPage() {
                         backgroundThinking(matchedTaskLabel),
                       ],
                       decision: assessPayload.decision,
-                      actions: assessPayload.actions,
-                      selectedActionId: null,
+                      evaluation: null,
                       acknowledgement: assessPayload.acknowledgement,
                     }
                   : message,
@@ -452,9 +424,8 @@ export default function TriageLabPage() {
                       severity: "high",
                       caseProgress: 0,
                     },
-                    actions: [],
-                    selectedActionId: null,
-                    acknowledgement: null,
+                    evaluation: null,
+                    acknowledgement: "The assessment could not be completed. Try again after the backend recovers.",
                   }
                 : message,
             ),
@@ -502,8 +473,7 @@ export default function TriageLabPage() {
           status: "thinking",
           thinking: [loadingSteps[0]],
           decision: null,
-          actions: [],
-          selectedActionId: null,
+          evaluation: null,
           acknowledgement: null,
           createdAt: now,
         },
@@ -580,9 +550,8 @@ export default function TriageLabPage() {
                     severity: "high",
                     caseProgress: 0,
                   },
-                  actions: [],
-                  selectedActionId: null,
-                  acknowledgement: null,
+                  evaluation: null,
+                  acknowledgement: "The live case could not be completed because the backend run failed.",
                 }
               : message,
           ),
@@ -594,23 +563,6 @@ export default function TriageLabPage() {
     },
     [history, tasks],
   );
-
-  const handleSelectAction = useCallback((messageId: string, actionId: string) => {
-    setMessages((prev) =>
-      prev.map((message) => {
-        if (message.id !== messageId || message.role !== "agent") return message;
-        if (message.selectedActionId !== null) return message;
-        return {
-          ...message,
-          selectedActionId: actionId,
-          acknowledgement:
-            message.actions.find((action) => action.id === actionId)?.label === "Answer follow-up"
-              ? "Type the answer in the reply box below to continue triage."
-              : "Action selection is local-only in the current triage UI.",
-        };
-      }),
-    );
-  }, []);
 
   return (
     <div className="flex min-h-svh flex-col">
@@ -636,7 +588,7 @@ export default function TriageLabPage() {
         </div>
       </header>
 
-      <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-5 px-6 pb-8 pt-6">
+      <main className="mx-auto flex h-[calc(100svh-73px)] w-full max-w-3xl flex-1 flex-col gap-5 overflow-hidden px-6 pb-4 pt-6">
         <CaseStatusBar
           caseProgress={latestAgent?.decision?.caseProgress ?? 0}
           severity={latestAgent?.decision?.severity ?? null}
@@ -649,7 +601,7 @@ export default function TriageLabPage() {
           </div>
         ) : null}
 
-        <div ref={scrollRef} className="scroll-area flex-1 space-y-5 overflow-y-auto pr-1">
+        <div ref={scrollRef} className="scroll-area min-h-0 flex-1 space-y-5 overflow-y-auto pr-1">
           {messages.length === 0 ? (
             <EmptyState />
           ) : (
@@ -657,18 +609,20 @@ export default function TriageLabPage() {
               message.role === "user" ? (
                 <UserMessage key={message.id} message={message} />
               ) : (
-                <AgentMessage key={message.id} message={message} onSelectAction={handleSelectAction} />
+                <AgentMessage key={message.id} message={message} />
               ),
             )
           )}
         </div>
 
-        <InputPanel
-          isRunning={isRunning}
-          tasks={tasks}
-          onSubmit={handleSubmit}
-          followUpQuestion={followUpQuestion}
-        />
+        <div className="sticky bottom-0 z-10 -mx-2 bg-background/95 px-2 pb-1 pt-2 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+          <InputPanel
+            isRunning={isRunning}
+            tasks={tasks}
+            onSubmit={handleSubmit}
+            followUpQuestion={followUpQuestion}
+          />
+        </div>
       </main>
     </div>
   );

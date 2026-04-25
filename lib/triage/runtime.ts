@@ -477,6 +477,31 @@ function strongestReferenceMatch(query: string): DatasetRow | null {
   return best?.row ?? null;
 }
 
+function isVagueComplaint(text: string): boolean {
+  const complaint = normaliseText(text).trim();
+  if (!complaint) return false;
+
+  const vagueTerms = [
+    "headache",
+    "chest pain",
+    "abdominal pain",
+    "belly pain",
+    "stomach pain",
+    "fever",
+    "dizziness",
+    "dizzy",
+    "weakness",
+    "vomiting",
+    "injury",
+    "shortness of breath",
+    "cough",
+    "rash",
+    "syncope",
+  ];
+
+  return vagueTerms.some((term) => complaint === term || complaint === `i have ${term}`);
+}
+
 function hasImmediateRedFlags(text: string): boolean {
   return mentionsAny(text, [
     "heart attack",
@@ -815,7 +840,7 @@ function extractAssessment(history: string[]): IntakeAssessment {
   const combined = expandedIntakeText(history);
   const referenceMatch = strongestReferenceMatch(combined);
 
-  if (referenceMatch?.referenceLevel) {
+  if (referenceMatch?.referenceLevel && !isVagueComplaint(history[0] ?? "")) {
     return assessmentFromLevel(
       referenceMatch.referenceLevel,
       `The reported symptoms match a high-priority triage pattern (${referenceMatch.chiefComplaint.toLowerCase()}) and should be escalated accordingly.`,
@@ -893,45 +918,144 @@ function extractAssessment(history: string[]): IntakeAssessment {
   );
 }
 
-const FOLLOW_UP_QUESTIONS = [
+const UNIVERSAL_RED_FLAG_QUESTION =
+  "Since this started, have you had any red flags like trouble breathing, chest pain or pressure, severe headache, confusion, vision changes, fainting, weakness on one side, speech difficulty, fever over 38.3C, or uncontrolled bleeding?";
+
+const COMPLAINT_FOLLOW_UPS = [
   {
-    id: "duration",
-    question: "How long has this been going on, and is it getting worse?",
-    triggers: ["pain", "fever", "vomiting", "injury", "bleeding", "shortness of breath"],
+    id: "headache-phase-1",
+    question:
+      "When did the headache start, did it come on suddenly or gradually, and is it the worst headache you have ever had?",
+    triggers: ["headache", "migraine", "head pain"],
   },
   {
-    id: "severity",
-    question: "Are there any red flags like trouble breathing, fainting, confusion, severe pain, or heavy bleeding?",
-    triggers: ["pain", "chest", "breathing", "bleeding", "dizzy", "weakness", "fever"],
+    id: "headache-phase-2",
+    question:
+      "Do you have neck stiffness, fever, rash, confusion, weakness, vision changes, or trouble speaking along with the headache?",
+    triggers: ["headache", "migraine", "head pain"],
   },
   {
-    id: "risk",
-    question: "What is the patient’s age, and do they have major risks such as pregnancy, heart disease, immune suppression, or recent surgery?",
-    triggers: ["fever", "pain", "bleeding", "pregnant", "chest", "abdominal"],
+    id: "chest-phase-1",
+    question:
+      "Is it chest pain, pressure, tightness, or heaviness, and does it spread to your arm, jaw, shoulder blade, or back?",
+    triggers: ["chest", "heart attack", "pressure", "tightness", "palpitations"],
+  },
+  {
+    id: "chest-phase-2",
+    question:
+      "Are you also having sweating, nausea, shortness of breath, fainting, or a history of heart disease, diabetes, or high cholesterol?",
+    triggers: ["chest", "heart attack", "pressure", "tightness", "palpitations"],
+  },
+  {
+    id: "abdomen-phase-1",
+    question:
+      "Where exactly is the abdominal pain, how severe is it out of 10, and did it start suddenly or gradually?",
+    triggers: ["abdominal", "belly", "stomach", "rlq", "ruq", "epigastric"],
+  },
+  {
+    id: "abdomen-phase-2",
+    question:
+      "Are you vomiting, unable to keep fluids down, having fever, black stools, vomiting blood, or pain that radiates to your back or shoulder?",
+    triggers: ["abdominal", "belly", "stomach", "rlq", "ruq", "epigastric"],
+  },
+  {
+    id: "infection-phase-1",
+    question:
+      "What temperature have you had, and are you also having chills, weakness, confusion, rash, recent surgery, or immune suppression?",
+    triggers: ["fever", "chills", "infection", "sepsis", "rash"],
+  },
+  {
+    id: "neuro-phase-1",
+    question:
+      "Did the weakness, confusion, dizziness, or neurological symptoms come on suddenly, and are you having facial droop, speech trouble, vision changes, or one-sided weakness?",
+    triggers: ["weakness", "confused", "speech", "vision", "stroke", "dizzy", "syncope"],
+  },
+  {
+    id: "trauma-phase-1",
+    question:
+      "How did the injury happen, was there any loss of consciousness, and do you have severe pain, uncontrolled bleeding, numbness, or trouble moving?",
+    triggers: ["injury", "fall", "accident", "trauma", "fracture", "laceration"],
+  },
+  {
+    id: "generic-onset",
+    question:
+      "What is the main problem, when did it start, and has it gotten worse, better, or stayed the same since it began?",
+    triggers: ["pain", "symptom", "problem", "vomiting", "bleeding", "shortness of breath"],
+  },
+  {
+    id: "generic-risk",
+    question:
+      "How severe is it out of 10, and do you have important medical risks like pregnancy, heart disease, diabetes, immune suppression, blood thinners, or recent surgery?",
+    triggers: ["pain", "symptom", "problem", "vomiting", "bleeding", "shortness of breath"],
   },
 ] as const;
 
+function complaintBuckets(text: string): string[] {
+  const buckets: string[] = [];
+  if (mentionsAny(text, ["headache", "migraine", "head pain"])) buckets.push("headache");
+  if (mentionsAny(text, ["chest", "heart attack", "pressure", "tightness", "palpitations"])) {
+    buckets.push("chest");
+  }
+  if (mentionsAny(text, ["abdominal", "belly", "stomach", "rlq", "ruq", "epigastric"])) {
+    buckets.push("abdomen");
+  }
+  if (mentionsAny(text, ["fever", "chills", "infection", "sepsis", "rash"])) {
+    buckets.push("infection");
+  }
+  if (mentionsAny(text, ["weakness", "confused", "speech", "vision", "stroke", "dizzy", "syncope"])) {
+    buckets.push("neuro");
+  }
+  if (mentionsAny(text, ["injury", "fall", "accident", "trauma", "fracture", "laceration"])) {
+    buckets.push("trauma");
+  }
+  return buckets;
+}
+
 function nextFollowUpQuestion(history: string[]): string | null {
   if (history.length === 0) return null;
-  if (history.length >= 3) return null;
+  if (history.length >= 4) return null;
 
   const combined = expandedIntakeText(history);
   const referenceMatch = strongestReferenceMatch(combined);
-  if (referenceMatch && referenceMatch.referenceLevel !== null && referenceMatch.referenceLevel <= 2) {
+  if (
+    referenceMatch &&
+    referenceMatch.referenceLevel !== null &&
+    referenceMatch.referenceLevel <= 2 &&
+    !isVagueComplaint(history[0] ?? "")
+  ) {
     return null;
   }
   if (hasImmediateRedFlags(combined)) {
     return null;
   }
 
-  const asked = history.length - 1;
-  const candidate = FOLLOW_UP_QUESTIONS.find((item, index) => {
-    if (index < asked) return false;
-    return mentionsAny(combined, [...item.triggers]);
+  const askedCount = history.length - 1;
+  const buckets = complaintBuckets(combined);
+
+  const candidateQuestions = COMPLAINT_FOLLOW_UPS.filter((item) => {
+    if (!mentionsAny(combined, [...item.triggers])) return false;
+    if (item.id.startsWith("headache") && !buckets.includes("headache")) return false;
+    if (item.id.startsWith("chest") && !buckets.includes("chest")) return false;
+    if (item.id.startsWith("abdomen") && !buckets.includes("abdomen")) return false;
+    if (item.id.startsWith("infection") && !buckets.includes("infection")) return false;
+    if (item.id.startsWith("neuro") && !buckets.includes("neuro")) return false;
+    if (item.id.startsWith("trauma") && !buckets.includes("trauma")) return false;
+    return true;
   });
 
-  if (candidate) return candidate.question;
-  return asked === 0 ? FOLLOW_UP_QUESTIONS[0].question : null;
+  if (askedCount === 0) {
+    return candidateQuestions[0]?.question ?? UNIVERSAL_RED_FLAG_QUESTION;
+  }
+
+  if (askedCount === 1) {
+    return candidateQuestions[1]?.question ?? UNIVERSAL_RED_FLAG_QUESTION;
+  }
+
+  if (askedCount === 2) {
+    return UNIVERSAL_RED_FLAG_QUESTION;
+  }
+
+  return "How severe is it right now, and do you have any major medical problems, pregnancy, immune suppression, blood thinners, or recent surgery that raise the risk?";
 }
 
 async function isEnvReady(): Promise<boolean> {

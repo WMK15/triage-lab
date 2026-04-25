@@ -27,6 +27,40 @@ export type Action = {
   intent?: "default" | "constructive" | "escalation";
 };
 
+export type EvaluationAssignment = {
+  patient_id: string;
+  agent_level: number;
+  truth_level: number | null;
+  reward: number | null;
+  order: number;
+  scored: boolean;
+  source: "dataset" | "manual";
+  chief_complaint?: string;
+};
+
+export type EvaluationSummary = {
+  scored_count: number;
+  exact_matches: number;
+  over_triage: number;
+  under_triage: number;
+  exact_rate: number;
+  mistriage_rate: number;
+  under_triage_rate: number;
+  off_by_one_count: number;
+  off_by_two_or_more_count: number;
+  confusion: Record<string, Record<string, number>>;
+};
+
+export type EvaluationDetails = {
+  compositeScore: number | null;
+  baseReward: number | null;
+  orderingBonus: number | null;
+  scoredCount: number;
+  manualCount: number;
+  assignments: EvaluationAssignment[];
+  summary: EvaluationSummary | null;
+};
+
 export type LiveTaskOption = {
   id: string;
   name: string;
@@ -160,10 +194,8 @@ export type AgentMessage = {
   thinking: ThinkingStep[];
   decision: Decision | null;
   triageClassifications?: TriageClassification[];
-  actions: Action[];
-  /** Set once when the user commits an action; immutable thereafter. */
-  selectedActionId: string | null;
-  /** Confirmation text shown after an action is committed. */
+  evaluation?: EvaluationDetails | null;
+  /** Final response text shown below the decision/evaluation. */
   acknowledgement: string | null;
   createdAt: number;
 };
