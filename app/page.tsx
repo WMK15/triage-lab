@@ -3,38 +3,220 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FlaskConical } from "lucide-react";
 
+import { AgentMessage } from "@/components/triage/agent-message";
 import { CaseStatusBar } from "@/components/triage/case-status-bar";
+import { EmptyState } from "@/components/triage/empty-state";
 import { InputPanel } from "@/components/triage/input-panel";
 import { UserMessage } from "@/components/triage/user-message";
-import { AgentMessage } from "@/components/triage/agent-message";
-import { EmptyState } from "@/components/triage/empty-state";
-import {
-  generateAgentResponse,
-  generateActionOutcome,
-} from "@/lib/triage/mock-agent";
 import type {
+  Action,
   AgentMessage as AgentMessageData,
-  EnvironmentType,
+  Decision,
+  LiveTaskOption,
   Message,
+  Severity,
+  ThinkingStep,
 } from "@/lib/triage/types";
 
-const THINKING_DELAY_MS = 2200;
+type EpisodePayload = {
+  id: string;
+  result: Record<string, unknown> | null;
+  meta: Record<string, unknown> | null;
+  trajectory: Array<Record<string, unknown>>;
+  rewards: Array<Record<string, unknown>>;
+};
 
 function makeId() {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
+function severityFromScore(score: number): Severity {
+  if (score >= 0.95) return "low";
+  if (score >= 0.75) return "moderate";
+  if (score >= 0.4) return "high";
+  return "critical";
+}
+
+function sentence(text: string) {
+  const trimmed = text.trim();
+  return trimmed.endsWith(".") ? trimmed : `${trimmed}.`;
+}
+
+function buildThinking(trajectory: EpisodePayload["trajectory"]): ThinkingStep[] {
+  return trajectory
+    .filter((event) => event.kind === "tool_result")
+    .map((event, index) => ({
+      id: `${String(event.tool ?? "step")}-${index}`,
+      label: String(event.tool ?? "step").replaceAll("_", " "),
+      detail: String(event.text ?? "No output returned."),
+    }));
+}
+
+function buildLoadingThinkingSteps(
+  taskLabel: string | undefined,
+  scenario: string,
+): ThinkingStep[] {
+  const notePreview = scenario.trim().slice(0, 96);
+  return [
+    {
+      id: "loading-match",
+      label: "Matching intake",
+      detail: taskLabel
+        ? `Anchoring the live shift around ${taskLabel}.`
+        : "Linking the intake note to the closest live case.",
+    },
+    {
+      id: "loading-env",
+      label: "Preparing environment",
+      detail: "Connecting to the OpenReward triage environment and opening a session.",
+    },
+    {
+      id: "loading-plan",
+      label: "Planning first actions",
+      detail: notePreview
+        ? `Using the operator note as context: ${notePreview}${scenario.trim().length > 96 ? "..." : ""}`
+        : "Reviewing the note and planning the first chart actions.",
+    },
+    {
+      id: "loading-tools",
+      label: "Running tool loop",
+      detail: "The agent is reading the chart, examining patients, and choosing next tools.",
+    },
+    {
+      id: "loading-score",
+      label: "Scoring episode",
+      detail: "Waiting for the backend to finish the shift and write the final episode files.",
+    },
+  ];
+}
+
+function buildDecision(episode: EpisodePayload): Decision {
+  const result = episode.result ?? {};
+  const status = typeof result.status === "string" ? result.status : "completed";
+  const score =
+    typeof result.score === "number"
+      ? result.score
+      : typeof result.total_reward === "number"
+        ? result.total_reward
+        : 0;
+  const note = typeof result.operator_note === "string" ? result.operator_note : null;
+  const task =
+    typeof result.task_id === "string"
+      ? result.task_id
+      : typeof result.task === "string"
+        ? result.task
+        : episode.id;
+  const summary =
+    typeof result.summary === "string"
+      ? result.summary
+      : `Shift run ${status} for ${task}.`;
+
+  return {
+    headline: `Shift status: ${status}`,
+    rationale: sentence(note ? `${summary} Operator note: ${note}` : summary),
+    severity: severityFromScore(score),
+    caseProgress: Math.round(score * 100),
+  };
+}
+
+function buildActions(episode: EpisodePayload): Action[] {
+  const result = episode.result ?? {};
+  const task =
+    typeof result.task_id === "string"
+      ? result.task_id
+      : typeof result.task === "string"
+        ? result.task
+        : episode.id;
+  const score =
+    typeof result.score === "number"
+      ? result.score
+      : typeof result.total_reward === "number"
+        ? result.total_reward
+        : 0;
+  const status = typeof result.status === "string" ? result.status : "complete";
+
+  return [
+    {
+      id: `${episode.id}-episode`,
+      label: "Review episode log",
+      description: `Inspect ${task} in the episodes archive.`,
+      intent: "default",
+    },
+    {
+      id: `${episode.id}-rerun`,
+      label: score >= 1 ? "Run adjacent case" : "Re-run with tighter note",
+      description:
+        score >= 1
+          ? `Shift run completed cleanly; compare against another dataset-matched case.`
+          : `Use a sharper operator note and compare the new rollout for ${task}.`,
+      intent: "constructive",
+    },
+    {
+      id: `${episode.id}-handoff`,
+      label: `Inspect ${status} result`,
+      description: `Open the detailed episode view to inspect the full multi-patient shift trace.`,
+      intent: status === "capped" ? "escalation" : "default",
+    },
+  ];
+}
+
+function buildAcknowledgement(episode: EpisodePayload): string | null {
+  const result = episode.result ?? {};
+  const status = typeof result.status === "string" ? result.status : null;
+  return status ? `Live shift run finished with status ${status}.` : null;
+}
+
+function messageFromEpisode(messageId: string, episode: EpisodePayload): AgentMessageData {
+  return {
+    id: messageId,
+    role: "agent",
+    status: "ready",
+    thinking: buildThinking(episode.trajectory),
+    decision: buildDecision(episode),
+    actions: buildActions(episode),
+    selectedActionId: episode.id ? `${episode.id}-episode` : null,
+    acknowledgement: buildAcknowledgement(episode),
+    createdAt: Date.now(),
+  };
+}
+
 export default function TriageLabPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isRunning, setIsRunning] = useState(false);
+  const [tasks, setTasks] = useState<LiveTaskOption[]>([]);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
-  // Auto-scroll the message column when new messages arrive.
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
     el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
   }, [messages]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadTasks() {
+      try {
+        const response = await fetch("/api/triage/tasks", { cache: "no-store" });
+        if (!response.ok) throw new Error("failed to load live cases");
+        const payload = (await response.json()) as { tasks: LiveTaskOption[] };
+        if (!cancelled) {
+          setTasks(payload.tasks);
+          setLoadError(null);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setLoadError(error instanceof Error ? error.message : "failed to load live cases");
+        }
+      }
+    }
+
+    void loadTasks();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const latestAgent = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
@@ -50,22 +232,12 @@ export default function TriageLabPage() {
   );
 
   const handleSubmit = useCallback(
-    (scenario: string, environment: EnvironmentType) => {
+    async (scenario: string, taskId: string) => {
+      const task = tasks.find((item) => item.id === taskId) ?? null;
       const userId = makeId();
       const agentId = makeId();
       const now = Date.now();
-
-      const placeholder: AgentMessageData = {
-        id: agentId,
-        role: "agent",
-        status: "thinking",
-        thinking: [],
-        decision: null,
-        actions: [],
-        selectedActionId: null,
-        acknowledgement: null,
-        createdAt: now,
-      };
+      const loadingSteps = buildLoadingThinkingSteps(task?.label, scenario);
 
       setMessages((prev) => [
         ...prev,
@@ -73,60 +245,115 @@ export default function TriageLabPage() {
           id: userId,
           role: "user",
           scenario,
-          environment,
+          environment: "clinical",
+          taskId,
+          taskLabel: task?.label,
           createdAt: now,
         },
-        placeholder,
+        {
+          id: agentId,
+          role: "agent",
+          status: "thinking",
+          thinking: [loadingSteps[0]],
+          decision: null,
+          actions: [],
+          selectedActionId: null,
+          acknowledgement: null,
+          createdAt: now,
+        },
       ]);
       setIsRunning(true);
 
-      const timeout = setTimeout(() => {
-        const response = generateAgentResponse(scenario, environment);
+      let loadingIndex = 0;
+      const loadingTimer = window.setInterval(() => {
+        loadingIndex = Math.min(loadingIndex + 1, loadingSteps.length - 1);
         setMessages((prev) =>
-          prev.map((m) =>
-            m.id === agentId && m.role === "agent"
+          prev.map((message) =>
+            message.id === agentId && message.role === "agent" && message.status === "thinking"
               ? {
-                  ...m,
-                  status: "ready",
-                  thinking: response.thinking,
-                  decision: response.decision,
-                  actions: response.actions,
+                  ...message,
+                  thinking: loadingSteps.slice(0, loadingIndex + 1),
                 }
-              : m,
+              : message,
           ),
         );
+      }, 1600);
+
+      try {
+        const runResponse = await fetch("/api/triage/run", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ taskId, note: scenario }),
+        });
+        const runPayload = (await runResponse.json()) as { episodeId?: string; error?: string };
+        if (!runResponse.ok || !runPayload.episodeId) {
+          throw new Error(runPayload.error ?? "failed to launch live case");
+        }
+
+        const episodeResponse = await fetch(`/api/episodes/${runPayload.episodeId}`, {
+          cache: "no-store",
+        });
+        const episodePayload = (await episodeResponse.json()) as EpisodePayload & { error?: string };
+        if (!episodeResponse.ok) {
+          throw new Error(episodePayload.error ?? "failed to load live episode");
+        }
+
+        setMessages((prev) =>
+          prev.map((message) =>
+            message.id === agentId && message.role === "agent"
+              ? messageFromEpisode(agentId, episodePayload)
+              : message,
+          ),
+        );
+      } catch (error) {
+        const text = error instanceof Error ? error.message : "live run failed";
+        setMessages((prev) =>
+          prev.map((message) =>
+            message.id === agentId && message.role === "agent"
+              ? {
+                  ...message,
+                  status: "ready",
+                  thinking: [
+                    {
+                      id: "backend-error",
+                      label: "Backend failure",
+                      detail: text,
+                    },
+                  ],
+                  decision: {
+                    headline: "Live case failed",
+                    rationale: sentence(text),
+                    severity: "high",
+                    caseProgress: 0,
+                  },
+                  actions: [],
+                  selectedActionId: null,
+                  acknowledgement: null,
+                }
+              : message,
+          ),
+        );
+      } finally {
+        window.clearInterval(loadingTimer);
         setIsRunning(false);
-      }, THINKING_DELAY_MS);
-
-      return () => clearTimeout(timeout);
+      }
     },
-    [],
+    [tasks],
   );
 
-  const handleSelectAction = useCallback(
-    (messageId: string, actionId: string) => {
-      setMessages((prev) =>
-        prev.map((m) => {
-          if (m.id !== messageId || m.role !== "agent") return m;
-          // Once committed, the choice is immutable.
-          if (m.selectedActionId !== null) return m;
-          const action = m.actions.find((a) => a.id === actionId);
-          if (!action || !m.decision) return m;
-          const outcome = generateActionOutcome(
-            action,
-            m.decision.caseProgress,
-          );
-          return {
-            ...m,
-            selectedActionId: actionId,
-            acknowledgement: outcome.acknowledgement,
-            decision: { ...m.decision, caseProgress: outcome.nextProgress },
-          };
-        }),
-      );
-    },
-    [],
-  );
+  const handleSelectAction = useCallback((messageId: string, actionId: string) => {
+    setMessages((prev) =>
+      prev.map((message) => {
+        if (message.id !== messageId || message.role !== "agent") return message;
+        if (message.selectedActionId !== null) return message;
+        return {
+          ...message,
+          selectedActionId: actionId,
+          acknowledgement: "Action selection is local-only in the live baseline UI.",
+        };
+      }),
+    );
+  }, []);
 
   return (
     <div className="flex min-h-svh flex-col">
@@ -141,13 +368,13 @@ export default function TriageLabPage() {
                 Triage Lab
               </p>
               <p className="text-[12px] text-[var(--text-muted)]">
-                Structured decision environment
+                Live triage-nurse baseline runner
               </p>
             </div>
           </div>
 
           <span className="hidden text-[12px] text-[var(--text-muted)] sm:block">
-            v0.1 · simulation mode
+            v0.2 · live mode
           </span>
         </div>
       </header>
@@ -159,7 +386,13 @@ export default function TriageLabPage() {
           caseCount={userScenarioCount}
         />
 
-        <InputPanel isRunning={isRunning} onSubmit={handleSubmit} />
+        <InputPanel isRunning={isRunning} tasks={tasks} onSubmit={handleSubmit} />
+
+        {loadError ? (
+          <div className="rounded-2xl border border-[var(--error-border)] bg-[var(--error-bg)] px-4 py-3 text-[13px] text-[var(--error-text)] shadow-sm">
+            Could not load live cases: {loadError}
+          </div>
+        ) : null}
 
         <div
           ref={scrollRef}

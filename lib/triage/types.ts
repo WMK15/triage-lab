@@ -27,11 +27,32 @@ export type Action = {
   intent?: "default" | "constructive" | "escalation";
 };
 
+export type LiveTaskOption = {
+  id: string;
+  name: string;
+  label: string;
+  hint: string;
+  narrativeRole: string;
+  presentingComplaint: string;
+  expectedDisposition: string;
+};
+
+export type IntakeSuggestion = {
+  taskId: string;
+  caseLabel: string;
+  complaint: string;
+  diagnosis: string;
+  disposition: string;
+  score: number;
+};
+
 export type UserMessage = {
   id: string;
   role: "user";
   scenario: string;
   environment: EnvironmentType;
+  taskId?: string;
+  taskLabel?: string;
   createdAt: number;
 };
 

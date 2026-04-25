@@ -1,41 +1,8 @@
-import fs from "node:fs";
-import path from "node:path";
 import Link from "next/link";
 
 import { FlaskConical } from "lucide-react";
 
-const RUNS_DIR = path.join(process.cwd(), "triage-nurse", "runs");
-
-type EpisodeRow = {
-  id: string;
-  modifiedAt: number;
-  hasResult: boolean;
-  trajectoryEvents: number;
-};
-
-function listEpisodes(): EpisodeRow[] {
-  if (!fs.existsSync(RUNS_DIR)) return [];
-  const entries = fs.readdirSync(RUNS_DIR, { withFileTypes: true });
-  const rows: EpisodeRow[] = [];
-  for (const entry of entries) {
-    if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
-    const dir = path.join(RUNS_DIR, entry.name);
-    const stat = fs.statSync(dir);
-    const trajPath = path.join(dir, "trajectory.jsonl");
-    let trajectoryEvents = 0;
-    if (fs.existsSync(trajPath)) {
-      const raw = fs.readFileSync(trajPath, "utf-8");
-      trajectoryEvents = raw.split("\n").filter((line) => line.length > 0).length;
-    }
-    rows.push({
-      id: entry.name,
-      modifiedAt: stat.mtimeMs,
-      hasResult: fs.existsSync(path.join(dir, "result.json")),
-      trajectoryEvents,
-    });
-  }
-  return rows.sort((a, b) => b.modifiedAt - a.modifiedAt);
-}
+import { listEpisodes } from "@/lib/triage/runtime";
 
 export default function EpisodesIndexPage() {
   const episodes = listEpisodes();
@@ -91,23 +58,38 @@ export default function EpisodesIndexPage() {
           <ul className="space-y-3">
             {episodes.map((episode) => (
               <li key={episode.id}>
-                <Link
-                  href={`/episodes/${episode.id}`}
-                  className="block rounded-2xl border border-border bg-surface p-4 shadow-sm transition-colors hover:bg-[var(--surface-secondary)]"
-                >
+                <div className="rounded-2xl border border-border bg-surface p-4 shadow-sm">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <p className="truncate font-mono text-[13px] text-foreground">
                         {episode.id}
                       </p>
+                      {episode.task ? (
+                        <p className="mt-1 text-[13px] text-foreground">{episode.task}</p>
+                      ) : null}
                       <p className="mt-1 text-[12px] text-[var(--text-muted)]">
                         {new Date(episode.modifiedAt).toLocaleString()}
                       </p>
+                      {episode.summary ? (
+                        <p className="mt-2 line-clamp-2 text-[12.5px] leading-relaxed text-[var(--text-secondary)]">
+                          {episode.summary}
+                        </p>
+                      ) : null}
                     </div>
                     <div className="flex shrink-0 flex-col items-end gap-1">
                       <span className="text-[12px] text-[var(--text-muted)]">
                         {episode.trajectoryEvents} events
                       </span>
+                      {episode.score !== null ? (
+                        <span className="font-mono text-[12px] text-[var(--text-secondary)]">
+                          {Math.round(episode.score * 100)}%
+                        </span>
+                      ) : null}
+                      {episode.disposition ? (
+                        <span className="text-[12px] text-[var(--text-secondary)]">
+                          {episode.disposition}
+                        </span>
+                      ) : null}
                       {episode.hasResult ? (
                         <span className="text-[12px] text-[var(--decision-text)]">
                           scored
@@ -119,7 +101,7 @@ export default function EpisodesIndexPage() {
                       )}
                     </div>
                   </div>
-                </Link>
+                </div>
               </li>
             ))}
           </ul>
