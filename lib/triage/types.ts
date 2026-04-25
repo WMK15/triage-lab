@@ -46,6 +46,23 @@ export type IntakeSuggestion = {
   score: number;
 };
 
+export type AssessResponse =
+  | {
+      kind: "question";
+      question: string;
+      summary: string;
+      matchedCase: IntakeSuggestion | null;
+      thinking: ThinkingStep[];
+    }
+  | {
+      kind: "decision";
+      decision: Decision;
+      actions: Action[];
+      acknowledgement: string;
+      matchedCase: IntakeSuggestion | null;
+      thinking: ThinkingStep[];
+    };
+
 export type UserMessage = {
   id: string;
   role: "user";

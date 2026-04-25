@@ -17,10 +17,16 @@ import type { IntakeSuggestion, LiveTaskOption } from "@/lib/triage/types";
 type Props = {
   isRunning: boolean;
   tasks: LiveTaskOption[];
-  onSubmit: (scenario: string, taskId: string) => void;
+  onSubmit: (scenario: string) => void;
+  submitLabel?: string;
 };
 
-export function InputPanel({ isRunning, tasks, onSubmit }: Props) {
+export function InputPanel({
+  isRunning,
+  tasks,
+  onSubmit,
+  submitLabel = "Assess case",
+}: Props) {
   const [scenario, setScenario] = useState("");
   const [taskId, setTaskId] = useState<string>(tasks[0]?.id ?? "");
   const [suggestions, setSuggestions] = useState<IntakeSuggestion[]>([]);
@@ -52,8 +58,8 @@ export function InputPanel({ isRunning, tasks, onSubmit }: Props) {
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault();
     const trimmed = scenario.trim();
-    if (!trimmed || isRunning || !selectedTask) return;
-    onSubmit(trimmed, selectedTask.id);
+    if (!trimmed || isRunning) return;
+    onSubmit(trimmed);
     setScenario("");
     setSuggestions([]);
   };
@@ -69,15 +75,15 @@ export function InputPanel({ isRunning, tasks, onSubmit }: Props) {
             htmlFor="scenario"
             className="text-xs font-medium uppercase tracking-wider text-[var(--text-secondary)]"
           >
-            Intake note
+            Patient report
           </Label>
           <div className="flex items-center gap-2">
             <Label htmlFor="task" className="text-xs text-[var(--text-muted)]">
-              Case
+              Similar case set
             </Label>
             <Select value={taskId} onValueChange={setTaskId}>
               <SelectTrigger id="task" className="h-8 min-w-[240px]">
-                <SelectValue placeholder="Select case" />
+                <SelectValue placeholder="Suggested benchmark set" />
               </SelectTrigger>
               <SelectContent>
                 {tasks.map((task) => (
@@ -85,7 +91,7 @@ export function InputPanel({ isRunning, tasks, onSubmit }: Props) {
                     <div className="flex flex-col items-start">
                       <span className="text-sm">{task.label}</span>
                       <span className="text-[11px] text-[var(--text-muted)]">
-                        {task.narrativeRole.replaceAll("_", " ")}
+                        {task.presentingComplaint}
                       </span>
                     </div>
                   </SelectItem>
@@ -100,10 +106,10 @@ export function InputPanel({ isRunning, tasks, onSubmit }: Props) {
           value={scenario}
           onChange={(e) => setScenario(e.target.value)}
           placeholder={
-            "Describe the patient complaint in plain language. The app will suggest the closest live case and run it with your note."
+            "Describe the main complaint, symptoms, and anything worrying you. The system may ask a short follow-up before assigning triage priority."
           }
           className="min-h-[120px] resize-none border-border bg-[var(--surface-secondary)]/40 text-[15px] leading-relaxed placeholder:text-[var(--text-muted)] focus-visible:bg-surface"
-          disabled={isRunning || !selectedTask}
+          disabled={isRunning}
         />
 
         <div className="flex items-center justify-between pt-1">
@@ -111,26 +117,26 @@ export function InputPanel({ isRunning, tasks, onSubmit }: Props) {
             {suggestions[0] ? (
               <>
                 <p>
-                  Best dataset match: {suggestions[0].diagnosis} via {suggestions[0].caseLabel}
+                  Closest similar case: {suggestions[0].diagnosis}
                 </p>
-                <p className="mt-1">Expected route: {suggestions[0].disposition}</p>
+                <p className="mt-1">Background benchmark set: {suggestions[0].caseLabel}</p>
               </>
             ) : selectedTask ? (
               <>
-                <p>{selectedTask.hint}</p>
-                <p className="mt-1">Expected route: {selectedTask.expectedDisposition}</p>
+                <p>{selectedTask.presentingComplaint}</p>
+                <p className="mt-1">The app uses nearby dataset cases behind the scenes for evaluation.</p>
               </>
             ) : (
-              <p>Select a case to enable live runs.</p>
+              <p>Describe the case to start triage.</p>
             )}
           </div>
           <Button
             type="submit"
-            disabled={isRunning || !scenario.trim() || !selectedTask}
+            disabled={isRunning || !scenario.trim()}
             className="rounded-full bg-[var(--accent)] px-5 text-[var(--accent-foreground)] shadow-none hover:bg-[var(--accent-hover)] hover:text-[var(--accent-foreground)]"
           >
             <Send className="h-4 w-4" />
-            {isRunning ? "Running…" : "Run live case"}
+            {isRunning ? "Assessing..." : submitLabel}
           </Button>
         </div>
       </div>
@@ -138,7 +144,7 @@ export function InputPanel({ isRunning, tasks, onSubmit }: Props) {
       {suggestions.length > 0 ? (
         <div className="mt-4 rounded-xl border border-[var(--thinking-border)] bg-[var(--thinking-bg)] px-4 py-3">
           <p className="text-[12px] font-semibold uppercase tracking-wider text-[var(--thinking-text)]">
-            Intake matches
+            Similar historical cases
           </p>
           <ul className="mt-2 space-y-2 text-[12.5px] text-[var(--text-secondary)]">
             {suggestions.map((suggestion) => (

@@ -2,12 +2,21 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 
-import type { IntakeSuggestion, LiveTaskOption } from "@/lib/triage/types";
+import type {
+  Action,
+  AssessResponse,
+  Decision,
+  IntakeSuggestion,
+  LiveTaskOption,
+  Severity,
+  ThinkingStep,
+} from "@/lib/triage/types";
 
 const ROOT = process.cwd();
 const TRIAGE_NURSE_DIR = path.join(ROOT, "triage-nurse");
 const RUNS_DIR = path.join(TRIAGE_NURSE_DIR, "runs");
 const DATASET_CSV = path.join(ROOT, "dataset", "emergency-triage.csv");
+const TRIAGE_NURSE_ENV_FILE = path.join(TRIAGE_NURSE_DIR, ".env");
 const ENV_URL = "http://127.0.0.1:8080";
 const ENV_PING_TIMEOUT_MS = 1500;
 const ENV_BOOT_TIMEOUT_MS = 15000;
@@ -58,6 +67,14 @@ type DatasetRow = {
   taskId: string;
 };
 
+type IntakeAssessment = {
+  severity: Severity;
+  headline: string;
+  rationale: string;
+  progress: number;
+  actions: Action[];
+};
+
 export type EpisodeData = {
   id: string;
   result: Record<string, unknown> | null;
@@ -97,6 +114,29 @@ function readJsonlFile(filePath: string): Array<Record<string, unknown>> {
     .split("\n")
     .filter((line) => line.trim().length > 0)
     .map((line) => JSON.parse(line) as Record<string, unknown>);
+}
+
+let configuredAgentModelCache: string | null = null;
+
+function configuredAgentModel(): string {
+  if (configuredAgentModelCache) return configuredAgentModelCache;
+
+  if (process.env.TRIAGE_NURSE_AGENT_MODEL?.trim()) {
+    configuredAgentModelCache = process.env.TRIAGE_NURSE_AGENT_MODEL.trim();
+    return configuredAgentModelCache;
+  }
+
+  if (fs.existsSync(TRIAGE_NURSE_ENV_FILE)) {
+    const raw = fs.readFileSync(TRIAGE_NURSE_ENV_FILE, "utf-8");
+    const match = raw.match(/^\s*TRIAGE_NURSE_AGENT_MODEL\s*=\s*(.+)\s*$/m);
+    if (match?.[1]) {
+      configuredAgentModelCache = match[1].trim().replace(/^['"]|['"]$/g, "");
+      return configuredAgentModelCache;
+    }
+  }
+
+  configuredAgentModelCache = "gpt-5-mini";
+  return configuredAgentModelCache;
 }
 
 function delay(ms: number) {
@@ -203,6 +243,228 @@ function overlapScore(query: string, target: string): number {
   return matches / qWords.size;
 }
 
+function sentence(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed) return "";
+  return /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`;
+}
+
+function buildIntakeThinking(
+  history: string[],
+  matchedCase: IntakeSuggestion | null,
+): ThinkingStep[] {
+  const latest = history.at(-1) ?? "";
+  const steps: ThinkingStep[] = [
+    {
+      id: "intake",
+      label: history.length === 1 ? "Reviewing complaint" : "Reviewing update",
+      detail: latest || "Waiting for a complaint.",
+    },
+  ];
+
+  if (matchedCase) {
+    steps.push({
+      id: "dataset",
+      label: "Cross-checking similar cases",
+      detail: `${matchedCase.diagnosis} (${Math.round(matchedCase.score * 100)}% match).`,
+    });
+  }
+
+  if (history.length > 1) {
+    steps.push({
+      id: "history",
+      label: "Using follow-up answer",
+      detail: `${history.length - 1} follow-up response${history.length === 2 ? "" : "s"} captured.`,
+    });
+  }
+
+  return steps;
+}
+
+function mentionsAny(text: string, terms: string[]): boolean {
+  return terms.some((term) => text.includes(term));
+}
+
+function extractAssessment(history: string[]): IntakeAssessment {
+  const combined = normaliseText(history.join(" "));
+
+  const severeDanger = mentionsAny(combined, [
+    "not breathing",
+    "unconscious",
+    "collapsed",
+    "seizure",
+    "blue",
+    "cardiac arrest",
+    "cannot breathe",
+  ]);
+  if (severeDanger) {
+    return {
+      severity: "critical",
+      headline: "Immediate triage required",
+      rationale:
+        "The symptoms suggest an immediate threat to airway, breathing, circulation, or neurologic status.",
+      progress: 100,
+      actions: [
+        {
+          id: "critical-bed",
+          label: "Move to resuscitation bay",
+          description: "Do not keep this patient in the waiting room.",
+          intent: "escalation",
+        },
+        {
+          id: "critical-team",
+          label: "Alert senior clinician",
+          description: "Immediate bedside assessment is warranted.",
+          intent: "escalation",
+        },
+        {
+          id: "critical-monitor",
+          label: "Start continuous monitoring",
+          description: "Track vitals while urgent treatment starts.",
+        },
+      ],
+    };
+  }
+
+  const highRisk = mentionsAny(combined, [
+    "chest pain",
+    "shortness of breath",
+    "weakness one side",
+    "stroke",
+    "confused",
+    "severe pain",
+    "vomiting blood",
+    "pregnant bleeding",
+    "anaphylaxis",
+    "high fever and rash",
+  ]);
+  if (highRisk) {
+    return {
+      severity: "high",
+      headline: "Very urgent triage",
+      rationale:
+        "These features can deteriorate quickly and should be assessed ahead of routine waiting-room complaints.",
+      progress: 90,
+      actions: [
+        {
+          id: "high-room",
+          label: "Place in monitored bed",
+          description: "Keep the patient where repeat observations are easy.",
+          intent: "escalation",
+        },
+        {
+          id: "high-obs",
+          label: "Repeat vitals now",
+          description: "Recheck objective instability before clinician review.",
+        },
+        {
+          id: "high-escalate",
+          label: "Escalate to urgent review",
+          description: "Prioritize medical assessment over standard queue order.",
+          intent: "constructive",
+        },
+      ],
+    };
+  }
+
+  const moderateRisk = mentionsAny(combined, [
+    "fever",
+    "abdominal pain",
+    "laceration",
+    "dizzy",
+    "vomiting",
+    "dehydrated",
+    "injury",
+    "fracture",
+    "headache",
+  ]);
+  if (moderateRisk) {
+    return {
+      severity: "moderate",
+      headline: "Urgent triage",
+      rationale:
+        "The complaint appears significant but does not currently show the strongest immediate red-flag features.",
+      progress: 78,
+      actions: [
+        {
+          id: "moderate-zone",
+          label: "Keep in urgent queue",
+          description: "Move ahead of routine complaints but without resuscitation-level response.",
+          intent: "constructive",
+        },
+        {
+          id: "moderate-analgesia",
+          label: "Start comfort measures",
+          description: "Offer early pain control, hydration, or wound care if appropriate.",
+        },
+        {
+          id: "moderate-watch",
+          label: "Watch for deterioration",
+          description: "Upgrade priority if symptoms worsen or new red flags appear.",
+        },
+      ],
+    };
+  }
+
+  return {
+    severity: "low",
+    headline: "Standard triage",
+    rationale:
+      "The available details fit a lower-acuity presentation that can usually wait for standard assessment.",
+    progress: 65,
+    actions: [
+      {
+        id: "low-queue",
+        label: "Keep in standard queue",
+        description: "Routine review appears reasonable based on the current description.",
+      },
+      {
+        id: "low-safety-net",
+        label: "Give return precautions",
+        description: "Advise the patient to report worsening pain, breathing issues, or collapse.",
+      },
+      {
+        id: "low-refresh",
+        label: "Recheck if waiting extends",
+        description: "Repeat the screen if new symptoms develop while waiting.",
+      },
+    ],
+  };
+}
+
+const FOLLOW_UP_QUESTIONS = [
+  {
+    id: "duration",
+    question: "How long has this been going on, and is it getting worse?",
+    triggers: ["pain", "fever", "vomiting", "injury", "bleeding", "shortness of breath"],
+  },
+  {
+    id: "severity",
+    question: "Are there any red flags like trouble breathing, fainting, confusion, severe pain, or heavy bleeding?",
+    triggers: ["pain", "chest", "breathing", "bleeding", "dizzy", "weakness", "fever"],
+  },
+  {
+    id: "risk",
+    question: "What is the patient’s age, and do they have major risks such as pregnancy, heart disease, immune suppression, or recent surgery?",
+    triggers: ["fever", "pain", "bleeding", "pregnant", "chest", "abdominal"],
+  },
+] as const;
+
+function nextFollowUpQuestion(history: string[]): string | null {
+  if (history.length === 0) return null;
+  if (history.length >= 3) return null;
+
+  const combined = normaliseText(history.join(" "));
+  const asked = history.length - 1;
+  const candidate = FOLLOW_UP_QUESTIONS.find((item, index) => {
+    if (index < asked) return false;
+    return mentionsAny(combined, [...item.triggers]);
+  });
+
+  if (candidate) return candidate.question;
+  return asked === 0 ? FOLLOW_UP_QUESTIONS[0].question : null;
+}
+
 async function isEnvReady(): Promise<boolean> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), ENV_PING_TIMEOUT_MS);
@@ -263,6 +525,50 @@ export function suggestCasesFromIntake(input: string): IntakeSuggestion[] {
     .filter((row) => row.score > 0)
     .sort((a, b) => b.score - a.score)
     .slice(0, 3);
+}
+
+export async function assessIntake(history: string[]): Promise<AssessResponse> {
+  const cleaned = history.map((item) => item.trim()).filter(Boolean);
+  if (cleaned.length === 0) {
+    throw new Error("history must include at least one complaint or answer");
+  }
+
+  const matchedCase = suggestCasesFromIntake(cleaned.join("\n"))[0] ?? null;
+  const thinking = buildIntakeThinking(cleaned, matchedCase);
+  const followUpQuestion = nextFollowUpQuestion(cleaned);
+
+  if (followUpQuestion) {
+    return {
+      kind: "question",
+      question: followUpQuestion,
+      summary: matchedCase
+        ? `Closest similar dataset case: ${matchedCase.diagnosis}.`
+        : "Collecting a bit more detail before assigning triage priority.",
+      matchedCase,
+      thinking,
+    } satisfies AssessResponse;
+  }
+
+  const assessment = extractAssessment(cleaned);
+  const matchedText = matchedCase
+    ? ` A similar historical case matched ${matchedCase.diagnosis.toLowerCase()} from the dataset.`
+    : "";
+  const decision: Decision = {
+    headline: assessment.headline,
+    rationale: sentence(`${assessment.rationale}${matchedText}`),
+    severity: assessment.severity,
+    caseProgress: assessment.progress,
+  };
+
+  return {
+    kind: "decision",
+    decision,
+    actions: assessment.actions,
+    acknowledgement:
+      "The visible triage recommendation is ready. Benchmark evaluation can continue in the background.",
+    matchedCase,
+    thinking,
+  } satisfies AssessResponse;
 }
 
 export function getEpisodeData(id: string): EpisodeData | null {
@@ -332,6 +638,7 @@ export async function runLiveEpisode(
   operatorNote?: string,
 ): Promise<{ episodeId: string }> {
   await ensureEnvServer();
+  const model = configuredAgentModel();
 
   const before = new Set(
     fs.existsSync(RUNS_DIR)
@@ -351,6 +658,8 @@ export async function runLiveEpisode(
     "triage_nurse.harness",
     "--task",
     taskId,
+    "--model",
+    model,
     "--max-turns",
     "50",
   ];
