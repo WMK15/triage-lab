@@ -6,6 +6,7 @@ import { Separator } from "@/components/ui/separator";
 import { ThinkingPanel } from "./thinking-panel";
 import { DecisionCard } from "./decision-card";
 import { ActionChoices } from "./action-choices";
+import { TriageClassifications } from "./triage-classifications";
 import type { AgentMessage as AgentMessageData } from "@/lib/triage/types";
 
 type Props = {
@@ -35,6 +36,12 @@ export function AgentMessage({ message, onSelectAction }: Props) {
           {message.decision ? (
             <>
               <DecisionCard decision={message.decision} />
+              {message.triageClassifications &&
+              message.triageClassifications.length > 0 ? (
+                <TriageClassifications
+                  classifications={message.triageClassifications}
+                />
+              ) : null}
               <Separator className="bg-border" />
               <ActionChoices
                 actions={message.actions}

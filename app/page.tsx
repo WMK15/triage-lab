@@ -19,6 +19,7 @@ import type {
   RunRequest,
   Severity,
   ThinkingStep,
+  TriageClassification,
 } from "@/lib/triage/types";
 
 type EpisodePayload = {
@@ -169,6 +170,43 @@ function buildAcknowledgement(episode: EpisodePayload): string | null {
   return status ? `Live shift run finished with status ${status}.` : null;
 }
 
+function asKtasLevel(value: unknown): TriageClassification["agentLevel"] | null {
+  return typeof value === "number" && value >= 1 && value <= 5
+    ? (value as TriageClassification["agentLevel"])
+    : null;
+}
+
+function buildTriageClassifications(
+  result: EpisodePayload["result"],
+): TriageClassification[] {
+  const rows = result?.per_patient_assignments;
+  if (!Array.isArray(rows)) return [];
+
+  return rows.flatMap((row) => {
+    if (typeof row !== "object" || row === null) return [];
+    const data = row as Record<string, unknown>;
+    const agentLevel = asKtasLevel(data.agent_level);
+    if (agentLevel == null) return [];
+
+    return [
+      {
+        patientId:
+          typeof data.patient_id === "string" ? data.patient_id : "unknown",
+        chiefComplaint:
+          typeof data.chief_complaint === "string"
+            ? data.chief_complaint
+            : undefined,
+        source: data.source === "manual" ? "manual" : "dataset",
+        agentLevel,
+        truthLevel: asKtasLevel(data.truth_level),
+        reward: typeof data.reward === "number" ? data.reward : null,
+        scored: data.scored === true,
+        order: typeof data.order === "number" ? data.order : undefined,
+      },
+    ];
+  });
+}
+
 function messageFromEpisode(messageId: string, episode: EpisodePayload): AgentMessageData {
   return {
     id: messageId,
@@ -176,6 +214,7 @@ function messageFromEpisode(messageId: string, episode: EpisodePayload): AgentMe
     status: "ready",
     thinking: buildThinking(episode.trajectory),
     decision: buildDecision(episode),
+    triageClassifications: buildTriageClassifications(episode.result),
     actions: buildActions(episode),
     selectedActionId: episode.id ? `${episode.id}-episode` : null,
     acknowledgement: buildAcknowledgement(episode),

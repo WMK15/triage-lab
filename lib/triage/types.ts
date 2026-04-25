@@ -115,6 +115,17 @@ export type PatientPreview = {
   ground_truth_ktas: KtasLevel | null;
 };
 
+export type TriageClassification = {
+  patientId: string;
+  chiefComplaint?: string;
+  source: "dataset" | "manual";
+  agentLevel: KtasLevel;
+  truthLevel: KtasLevel | null;
+  reward: number | null;
+  scored: boolean;
+  order?: number;
+};
+
 export type RunRequest =
   | {
       mode: "test";
@@ -147,6 +158,7 @@ export type AgentMessage = {
   status: "thinking" | "ready";
   thinking: ThinkingStep[];
   decision: Decision | null;
+  triageClassifications?: TriageClassification[];
   actions: Action[];
   /** Set once when the user commits an action; immutable thereafter. */
   selectedActionId: string | null;
