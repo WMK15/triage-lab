@@ -14,6 +14,7 @@ const ENV_URL = "http://127.0.0.1:8080";
 const ENV_PING_TIMEOUT_MS = 1500;
 const ENV_BOOT_TIMEOUT_MS = 10000;
 const ENV_START_LOG = path.join("/tmp", "triage-nurse-env-next.log");
+const APP_MAX_TURNS = 24;
 
 type CaseFile = {
   id: string;
@@ -21,6 +22,7 @@ type CaseFile = {
   presenting_complaint: string;
   narrative_role: string;
   expected_disposition?: string;
+  true_diagnosis?: string;
 };
 
 type DatasetRow = {
@@ -52,6 +54,13 @@ export type EpisodeRow = {
 function readJsonFile(filePath: string): Record<string, unknown> | null {
   if (!fs.existsSync(filePath)) return null;
   return JSON.parse(fs.readFileSync(filePath, "utf-8")) as Record<string, unknown>;
+}
+
+function makeEpisodeId(taskId: string, model: string): string {
+  const ts = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
+  const short = Math.random().toString(16).slice(2, 8).padEnd(6, "0");
+  const safeModel = model.replaceAll("/", "-");
+  return `${taskId}__${safeModel}__${ts}-${short}`;
 }
 
 function readJsonlFile(filePath: string): Array<Record<string, unknown>> {
@@ -174,10 +183,11 @@ export function listLiveTasks(): LiveTaskOption[] {
     .map((name) => {
       const fullPath = path.join(CASES_DIR, name);
       const file = JSON.parse(fs.readFileSync(fullPath, "utf-8")) as CaseFile;
+      const publicLabel = file.true_diagnosis ?? file.presenting_complaint;
       return {
         id: file.id,
         name: file.name,
-        label: file.name,
+        label: publicLabel,
         hint: file.presenting_complaint,
         narrativeRole: file.narrative_role,
         presentingComplaint: file.presenting_complaint,
@@ -273,55 +283,61 @@ export async function runLiveEpisode(
 ): Promise<{ episodeId: string }> {
   await ensureEnvServer();
 
-  const before = new Set(
-    fs.existsSync(RUNS_DIR)
-      ? fs
-          .readdirSync(RUNS_DIR, { withFileTypes: true })
-          .filter((entry) => entry.isDirectory())
-          .map((entry) => entry.name)
-      : [],
+  const episodeId = makeEpisodeId(taskId, "gpt-5-mini");
+  const episodeDir = path.join(RUNS_DIR, episodeId);
+  fs.mkdirSync(episodeDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(episodeDir, "meta.json"),
+    JSON.stringify(
+      {
+        episode_id: episodeId,
+        status: "running",
+        task_id: taskId,
+        selected_case: taskId,
+        operator_note: operatorNote?.trim() ?? null,
+        started_at: new Date().toISOString(),
+      },
+      null,
+      2,
+    ),
+  );
+  fs.writeFileSync(
+    path.join(episodeDir, "trajectory.jsonl"),
+    `${JSON.stringify({
+      turn: 0,
+      type: "queued",
+      task_id: taskId,
+      selected_case: taskId,
+      text: "App requested a live single-case run and is waiting for the harness to start.",
+      ts: new Date().toISOString(),
+    })}\n`,
   );
 
-  const args = ["run", "python", "-m", "triage_nurse.harness", "--task", "demo-shift-001"];
+  const args = [
+    "run",
+    "python",
+    "-m",
+    "triage_nurse.harness",
+    "--split",
+    "app",
+    "--task",
+    taskId,
+    "--max-turns",
+    String(APP_MAX_TURNS),
+    "--episode-id",
+    episodeId,
+  ];
   const child = spawn(UV_BIN, args, {
     cwd: TRIAGE_NURSE_DIR,
-    stdio: ["ignore", "pipe", "pipe"],
+    detached: true,
+    stdio: ["ignore", "ignore", "ignore"],
     env: {
       ...process.env,
       TRIAGE_SELECTED_CASE: taskId,
       TRIAGE_OPERATOR_NOTE: operatorNote?.trim() ?? "",
     },
   });
+  child.unref();
 
-  const stdout: Buffer[] = [];
-  const stderr: Buffer[] = [];
-  child.stdout.on("data", (chunk) => stdout.push(Buffer.from(chunk)));
-  child.stderr.on("data", (chunk) => stderr.push(Buffer.from(chunk)));
-
-  const exitCode: number = await new Promise((resolve, reject) => {
-    child.on("error", reject);
-    child.on("close", resolve);
-  });
-
-  if (exitCode !== 0) {
-    throw new Error(
-      `triage harness failed: ${Buffer.concat(stderr).toString("utf-8") || Buffer.concat(stdout).toString("utf-8")}`,
-    );
-  }
-
-  const after = fs
-    .readdirSync(RUNS_DIR, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name);
-  const created = after.find((name) => !before.has(name));
-
-  if (!created) {
-    const match = Buffer.concat(stdout)
-      .toString("utf-8")
-      .match(/\[harness\]\s+([^\s]+)\s+status=/);
-    if (match?.[1]) return { episodeId: match[1] };
-    throw new Error("could not determine created episode id");
-  }
-
-  return { episodeId: created };
+  return { episodeId };
 }

@@ -124,6 +124,38 @@ def _load_case(case_id: str) -> dict[str, Any]:
     raise FileNotFoundError(f"case {case_id!r} not found in {CASES_DIR}")
 
 
+def _single_case_specs() -> list[dict[str, Any]]:
+    specs: list[dict[str, Any]] = []
+    for path in sorted(CASES_DIR.glob("case_*.json")):
+        raw = json.loads(path.read_text())
+        specs.append(
+            {
+                "id": raw["id"],
+                "name": raw["name"],
+                "presenting_complaint": raw["presenting_complaint"],
+                "patients": [{"id": raw["id"], "arrived_at_min": 0}],
+                "shift_length_min": 90,
+                "max_turns": 60,
+                "seed": 0,
+            }
+        )
+    example = CASES_DIR / "example_acute_mi.json"
+    if example.exists():
+        raw = json.loads(example.read_text())
+        specs.append(
+            {
+                "id": raw["id"],
+                "name": raw["name"],
+                "presenting_complaint": raw["presenting_complaint"],
+                "patients": [{"id": raw["id"], "arrived_at_min": 0}],
+                "shift_length_min": 90,
+                "max_turns": 60,
+                "seed": 0,
+            }
+        )
+    return specs
+
+
 def _patient_from_case(raw: dict[str, Any], arrived_at_min: int) -> Patient:
     """Map case-template JSON shape onto Patient model.
 
@@ -239,8 +271,14 @@ class TriageEnv(Environment):
 
     @classmethod
     def list_tasks(cls, split: str) -> list[JSONObject]:
-        """Returns tasks for the given split. For now all splits expose the
-        single demo shift task from cases/demo_shift.json."""
+        """Returns tasks for the given split.
+
+        - `test`: full multi-patient demo shift
+        - `app`: one-patient tasks for the Next.js app
+        """
+        if split == "app":
+            return _single_case_specs()
+
         path = CASES_DIR / "demo_shift.json"
         if not path.exists():
             return []
@@ -260,7 +298,10 @@ class TriageEnv(Environment):
 
     @classmethod
     def list_splits(cls):
-        return [Split(name="test", type="test")]
+        return [
+            Split(name="test", type="test"),
+            Split(name="app", type="test"),
+        ]
 
     def get_prompt(self) -> list[TextBlock]:
         lines: list[str] = []

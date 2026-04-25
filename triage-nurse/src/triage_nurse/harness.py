@@ -12,6 +12,7 @@ and harness; cumulative spend is reset per episode and capped at
 
 Reference pattern (verified working): ``spike/harness_spike.py``.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -78,11 +79,12 @@ def run_task(
     model: str,
     max_turns: int,
     output_dir: Path,
+    episode_id_override: str | None = None,
 ) -> dict:
     """Run one task end-to-end, write the rollout, and return the result.json content."""
     spec = _task_spec(task)
     task_id = str(spec.get("id", "unknown"))
-    episode_id = _make_episode_id(task_id, model)
+    episode_id = episode_id_override or _make_episode_id(task_id, model)
     ep_dir = output_dir / episode_id
     ep_dir.mkdir(parents=True, exist_ok=True)
     traj_path = ep_dir / "trajectory.jsonl"
@@ -96,15 +98,44 @@ def run_task(
     turns = 0
     finished = False
 
+    _write_jsonl(
+        traj_path,
+        {
+            "turn": 0,
+            "type": "episode_started",
+            "task_id": task_id,
+            "model": model,
+            "ts": started,
+        },
+    )
+
     try:
         with env.session(task=task) as session:
             prompt_blocks = session.get_prompt()
             prompt_text = "".join(getattr(b, "text", "") for b in prompt_blocks)
+            _write_jsonl(
+                traj_path,
+                {
+                    "turn": 0,
+                    "type": "prompt_loaded",
+                    "text": prompt_text,
+                    "ts": _now_iso(),
+                },
+            )
             messages: list[dict] = [{"role": "user", "content": prompt_text}]
             tools = (
                 session.list_tools(format="openai")
                 if hasattr(session, "list_tools")
                 else env.list_tools(format="openai")
+            )
+            _write_jsonl(
+                traj_path,
+                {
+                    "turn": 0,
+                    "type": "tools_loaded",
+                    "count": len(tools),
+                    "ts": _now_iso(),
+                },
             )
 
             while not finished and turns < max_turns:
@@ -155,9 +186,7 @@ def run_task(
                         },
                     )
                     tr = session.call_tool(tc.function.name, args)
-                    text = "".join(
-                        getattr(b, "text", str(b)) for b in getattr(tr, "blocks", [])
-                    )
+                    text = "".join(getattr(b, "text", str(b)) for b in getattr(tr, "blocks", []))
                     reward = float(getattr(tr, "reward", 0.0) or 0.0)
                     fin = bool(getattr(tr, "finished", False))
                     cumulative_reward += reward
@@ -182,9 +211,7 @@ def run_task(
                             "cumulative": cumulative_reward,
                         },
                     )
-                    messages.append(
-                        {"role": "tool", "tool_call_id": tc.id, "content": text}
-                    )
+                    messages.append({"role": "tool", "tool_call_id": tc.id, "content": text})
                     if fin:
                         finished = True
             else:
@@ -228,9 +255,11 @@ def main(argv: list[str] | None = None) -> int:
     require_llm_key()
     p = argparse.ArgumentParser(prog="triage-nurse harness")
     p.add_argument("--task", default="all", help="task id, or 'all'")
+    p.add_argument("--split", default="test")
     p.add_argument("--max-turns", type=int, default=200)
     p.add_argument("--model", default=settings.AGENT_MODEL)
     p.add_argument("--output-dir", default="runs")
+    p.add_argument("--episode-id")
     args = p.parse_args(argv)
 
     output_dir = Path(args.output_dir)
@@ -240,7 +269,7 @@ def main(argv: list[str] | None = None) -> int:
     env, name = _connect_env(client)
     print(f"[harness] connected to env: {name}")
 
-    tasks = env.list_tasks(split="test")
+    tasks = env.list_tasks(split=args.split)
     if args.task != "all":
         tasks = [t for t in tasks if _task_spec(t).get("id") == args.task]
         if not tasks:
@@ -248,8 +277,19 @@ def main(argv: list[str] | None = None) -> int:
             return 2
     print(f"[harness] running {len(tasks)} task(s)")
 
+    if args.episode_id and len(tasks) != 1:
+        print("[harness] --episode-id requires exactly one task", file=sys.stderr)
+        return 2
+
     for t in tasks:
-        run_task(env, t, args.model, args.max_turns, output_dir)
+        run_task(
+            env,
+            t,
+            args.model,
+            args.max_turns,
+            output_dir,
+            episode_id_override=args.episode_id,
+        )
     return 0
 
 

@@ -43,49 +43,115 @@ function sentence(text: string) {
 }
 
 function buildThinking(trajectory: EpisodePayload["trajectory"]): ThinkingStep[] {
-  return trajectory
-    .filter((event) => event.kind === "tool_result")
-    .map((event, index) => ({
-      id: `${String(event.tool ?? "step")}-${index}`,
-      label: String(event.tool ?? "step").replaceAll("_", " "),
-      detail: String(event.text ?? "No output returned."),
-    }));
+  return trajectory.flatMap((event, index) => {
+    const type = String(event.type ?? event.kind ?? "");
+    if (type === "queued") {
+      return [
+        {
+          id: `queued-${index}`,
+          label: "Queued run",
+          detail: String(event.text ?? "The backend accepted the run and is waiting for the harness to start."),
+        },
+      ];
+    }
+    if (type === "episode_started") {
+      return [
+        {
+          id: `started-${index}`,
+          label: "Episode started",
+          detail: `Running task ${String(event.task_id ?? "case")} with model ${String(event.model ?? "unknown")}.`,
+        },
+      ];
+    }
+    if (type === "prompt_loaded") {
+      return [
+        {
+          id: `prompt-${index}`,
+          label: "Prompt loaded",
+          detail: "The backend opened the environment session and loaded the case prompt.",
+        },
+      ];
+    }
+    if (type === "tools_loaded") {
+      return [
+        {
+          id: `tools-${index}`,
+          label: "Tools ready",
+          detail: `${String(event.count ?? 0)} tools are available for the model to use.`,
+        },
+      ];
+    }
+    if (type === "tool_call") {
+      return [
+        {
+          id: `call-${index}`,
+          label: `Calling ${String(event.tool ?? "tool").replaceAll("_", " ")}`,
+          detail: typeof event.args === "object" ? JSON.stringify(event.args) : "Preparing tool input.",
+        },
+      ];
+    }
+    if (type === "tool_result") {
+      return [
+        {
+          id: `result-${index}`,
+          label: `${String(event.tool ?? "tool").replaceAll("_", " ")} result`,
+          detail: String(event.text ?? "No output returned."),
+        },
+      ];
+    }
+    if (type === "assistant_text") {
+      return [
+        {
+          id: `assistant-${index}`,
+          label: "Model response",
+          detail: String(event.text ?? "The model replied without a tool call."),
+        },
+      ];
+    }
+    if (type === "error") {
+      return [
+        {
+          id: `error-${index}`,
+          label: "Backend error",
+          detail: String(event.error ?? "Unknown backend error."),
+        },
+      ];
+    }
+    return [];
+  });
 }
 
-function buildLoadingThinkingSteps(
+function buildPendingThinking(
+  episode: EpisodePayload,
   taskLabel: string | undefined,
   scenario: string,
 ): ThinkingStep[] {
-  const notePreview = scenario.trim().slice(0, 96);
+  const realSteps = buildThinking(episode.trajectory);
+  if (realSteps.length === 0) {
+    const metaStatus = typeof episode.meta?.status === "string" ? episode.meta.status : "starting";
+    return [
+      {
+        id: "starting",
+        label: metaStatus === "running" ? "Starting live run" : "Preparing live run",
+        detail: taskLabel
+          ? `Opening the shift and anchoring on ${taskLabel}.`
+          : "Opening the shift and preparing the first patient actions.",
+      },
+      {
+        id: "note",
+        label: "Using intake note",
+        detail: scenario.trim() || "Waiting for the backend to begin writing trajectory events.",
+      },
+    ];
+  }
+
+  const tail = realSteps.slice(-6);
   return [
+    ...tail,
     {
-      id: "loading-match",
-      label: "Matching intake",
-      detail: taskLabel
-        ? `Anchoring the live shift around ${taskLabel}.`
-        : "Linking the intake note to the closest live case.",
-    },
-    {
-      id: "loading-env",
-      label: "Preparing environment",
-      detail: "Connecting to the OpenReward triage environment and opening a session.",
-    },
-    {
-      id: "loading-plan",
-      label: "Planning first actions",
-      detail: notePreview
-        ? `Using the operator note as context: ${notePreview}${scenario.trim().length > 96 ? "..." : ""}`
-        : "Reviewing the note and planning the first chart actions.",
-    },
-    {
-      id: "loading-tools",
-      label: "Running tool loop",
-      detail: "The agent is reading the chart, examining patients, and choosing next tools.",
-    },
-    {
-      id: "loading-score",
-      label: "Scoring episode",
-      detail: "Waiting for the backend to finish the shift and write the final episode files.",
+      id: "await-next-step",
+      label: "Choosing next action",
+      detail: "Latest backend event received. Waiting for the model to pick the next tool call.",
     },
   ];
 }
@@ -109,10 +175,21 @@ function buildDecision(episode: EpisodePayload): Decision {
   const summary =
     typeof result.summary === "string"
       ? result.summary
-      : `Shift run ${status} for ${task}.`;
+      : status === "complete"
+        ? `Single-case run completed for ${task}.`
+        : `Single-case run stopped with status ${status} for ${task}.`;
+
+  const headline =
+    status === "complete"
+      ? `Case run complete`
+      : status === "max_turns"
+        ? `Run stopped at max turns`
+        : status === "capped"
+          ? `Run stopped by cost cap`
+          : `Run status: ${status}`;
 
   return {
-    headline: `Shift status: ${status}`,
+    headline,
     rationale: sentence(note ? `${summary} Operator note: ${note}` : summary),
     severity: severityFromScore(score),
     caseProgress: Math.round(score * 100),
@@ -127,12 +204,6 @@ function buildActions(episode: EpisodePayload): Action[] {
       : typeof result.task === "string"
         ? result.task
         : episode.id;
-  const score =
-    typeof result.score === "number"
-      ? result.score
-      : typeof result.total_reward === "number"
-        ? result.total_reward
-        : 0;
   const status = typeof result.status === "string" ? result.status : "complete";
 
   return [
@@ -144,17 +215,17 @@ function buildActions(episode: EpisodePayload): Action[] {
     },
     {
       id: `${episode.id}-rerun`,
-      label: score >= 1 ? "Run adjacent case" : "Re-run with tighter note",
+      label: status === "complete" ? "Run adjacent case" : "Retry case run",
       description:
-        score >= 1
-          ? `Shift run completed cleanly; compare against another dataset-matched case.`
-          : `Use a sharper operator note and compare the new rollout for ${task}.`,
+        status === "complete"
+          ? `Case run completed cleanly; compare against another dataset-matched case.`
+          : `This run ended as ${status}; retry ${task} with a tighter note or fewer ambiguities.`,
       intent: "constructive",
     },
     {
       id: `${episode.id}-handoff`,
       label: `Inspect ${status} result`,
-      description: `Open the detailed episode view to inspect the full multi-patient shift trace.`,
+      description: `Open the detailed episode view to inspect the case trajectory and tool trace.`,
       intent: status === "capped" ? "escalation" : "default",
     },
   ];
@@ -163,7 +234,7 @@ function buildActions(episode: EpisodePayload): Action[] {
 function buildAcknowledgement(episode: EpisodePayload): string | null {
   const result = episode.result ?? {};
   const status = typeof result.status === "string" ? result.status : null;
-  return status ? `Live shift run finished with status ${status}.` : null;
+  return status ? `Live case run finished with status ${status}.` : null;
 }
 
 function messageFromEpisode(messageId: string, episode: EpisodePayload): AgentMessageData {
@@ -237,8 +308,6 @@ export default function TriageLabPage() {
       const userId = makeId();
       const agentId = makeId();
       const now = Date.now();
-      const loadingSteps = buildLoadingThinkingSteps(task?.label, scenario);
-
       setMessages((prev) => [
         ...prev,
         {
@@ -254,7 +323,15 @@ export default function TriageLabPage() {
           id: agentId,
           role: "agent",
           status: "thinking",
-          thinking: [loadingSteps[0]],
+          thinking: [
+            {
+              id: "starting",
+              label: "Starting live run",
+              detail: task?.label
+                ? `Opening the shift and anchoring on ${task.label}.`
+                : "Opening the shift and preparing the first patient actions.",
+            },
+          ],
           decision: null,
           actions: [],
           selectedActionId: null,
@@ -263,21 +340,6 @@ export default function TriageLabPage() {
         },
       ]);
       setIsRunning(true);
-
-      let loadingIndex = 0;
-      const loadingTimer = window.setInterval(() => {
-        loadingIndex = Math.min(loadingIndex + 1, loadingSteps.length - 1);
-        setMessages((prev) =>
-          prev.map((message) =>
-            message.id === agentId && message.role === "agent" && message.status === "thinking"
-              ? {
-                  ...message,
-                  thinking: loadingSteps.slice(0, loadingIndex + 1),
-                }
-              : message,
-          ),
-        );
-      }, 1600);
 
       try {
         const runResponse = await fetch("/api/triage/run", {
@@ -290,21 +352,46 @@ export default function TriageLabPage() {
           throw new Error(runPayload.error ?? "failed to launch live case");
         }
 
-        const episodeResponse = await fetch(`/api/episodes/${runPayload.episodeId}`, {
-          cache: "no-store",
-        });
-        const episodePayload = (await episodeResponse.json()) as EpisodePayload & { error?: string };
-        if (!episodeResponse.ok) {
-          throw new Error(episodePayload.error ?? "failed to load live episode");
+        let complete = false;
+        for (let attempt = 0; attempt < 120; attempt += 1) {
+          const episodeResponse = await fetch(`/api/episodes/${runPayload.episodeId}`, {
+            cache: "no-store",
+          });
+          const episodePayload = (await episodeResponse.json()) as EpisodePayload & { error?: string };
+          if (!episodeResponse.ok) {
+            throw new Error(episodePayload.error ?? "failed to load live episode");
+          }
+
+          if (episodePayload.result) {
+            setMessages((prev) =>
+              prev.map((message) =>
+                message.id === agentId && message.role === "agent"
+                  ? messageFromEpisode(agentId, episodePayload)
+                  : message,
+              ),
+            );
+            complete = true;
+            break;
+          }
+
+          setMessages((prev) =>
+            prev.map((message) =>
+              message.id === agentId && message.role === "agent"
+                ? {
+                    ...message,
+                    status: "thinking",
+                    thinking: buildPendingThinking(episodePayload, task?.label, scenario),
+                  }
+                : message,
+            ),
+          );
+
+          await new Promise((resolve) => window.setTimeout(resolve, 1500));
         }
 
-        setMessages((prev) =>
-          prev.map((message) =>
-            message.id === agentId && message.role === "agent"
-              ? messageFromEpisode(agentId, episodePayload)
-              : message,
-          ),
-        );
+        if (!complete) {
+          throw new Error("live run timed out before the episode finished writing its result");
+        }
       } catch (error) {
         const text = error instanceof Error ? error.message : "live run failed";
         setMessages((prev) =>
@@ -334,7 +421,6 @@ export default function TriageLabPage() {
           ),
         );
       } finally {
-        window.clearInterval(loadingTimer);
         setIsRunning(false);
       }
     },

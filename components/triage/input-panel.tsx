@@ -85,7 +85,7 @@ export function InputPanel({ isRunning, tasks, onSubmit }: Props) {
                     <div className="flex flex-col items-start">
                       <span className="text-sm">{task.label}</span>
                       <span className="text-[11px] text-[var(--text-muted)]">
-                        {task.narrativeRole.replaceAll("_", " ")}
+                        {task.presentingComplaint}
                       </span>
                     </div>
                   </SelectItem>
