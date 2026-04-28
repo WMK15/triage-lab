@@ -71,7 +71,9 @@ Print example training commands:
 uv run python scripts/print_training_commands.py
 ```
 
-One concrete external trainer shape is:
+The repo includes a compatibility shim for the short SkyRL command shape. It
+generates SkyRL prompt datasets, registers a SkyRL-Gym adapter for
+`triagebatchenv`, and dispatches to SkyRL's Python module entrypoint:
 
 ```bash
 skyrl train \
@@ -85,7 +87,12 @@ skyrl train \
   --eval-every 20
 ```
 
-This repo does not include the trainer itself. It now provides the split-aware env surface needed by an external OpenReward-compatible trainer.
+Use `./bin/skyrl train ...` if the shim has not been linked onto `PATH`.
+
+SkyRL GRPO training still requires a CUDA GPU node with the SkyRL Python 3.12
+then stops before launching vLLM/FSDP. The `--env-url` flag is retained for the
+OpenReward-compatible command shape; SkyRL itself trains through the local
+SkyRL-Gym adapter and generated Parquet datasets.
 
 ## Layout
 

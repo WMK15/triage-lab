@@ -12,3 +12,4 @@ build/
 dist/
 runs/*
 !runs/.gitkeep
+skyrl-runs/

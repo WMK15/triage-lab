@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SKYRL_VENV="${SKYRL_VENV:-$HOME/venvs/skyrl}"
+PYTHON="$SKYRL_VENV/bin/python"
+
+if [[ ! -x "$PYTHON" ]]; then
+  printf 'skyrl shim error: expected Python at %s\n' "$PYTHON" >&2
+  printf 'Install SkyRL with: uv venv --python 3.12 %s && uv pip install --python %s "skyrl[skyrl-train]"\n' "$SKYRL_VENV" "$PYTHON" >&2
+  exit 127
+fi
+
+exec "$PYTHON" -m triage_nurse.skyrl_cli "$@"

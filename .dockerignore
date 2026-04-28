@@ -1,0 +1,13 @@
+node_modules/
+.next/
+app/
+components/
+lib/
+public/
+triage-nurse/.venv/
+triage-nurse/runs/
+triage-nurse/skyrl-runs/
+triage-nurse/.pytest_cache/
+**/__pycache__/
+*.pyc
+.git/

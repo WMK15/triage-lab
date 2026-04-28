@@ -15,7 +15,7 @@ No judge. Ground truth is exact match against KTAS_expert from the dataset.
 """
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 from .world_state import KtasLevel
 
@@ -23,15 +23,17 @@ from .world_state import KtasLevel
 class AssignmentResult(BaseModel):
     patient_id: str
     agent_level: KtasLevel
-    # Optional: dataset patients have it from KTAS_expert; manual patients
-    # have it set when user provided expected_ktas, otherwise None (unscored).
     truth_level: KtasLevel | None = None
-    reward: float | None = None  # None for unscored
-    order: int  # 1-based: which assignment was this in the episode
+    reward: float | None = None
+    order: int
+    scored: bool = False
 
-    @property
-    def scored(self) -> bool:
-        return self.truth_level is not None
+    @model_validator(mode="before")
+    @classmethod
+    def _derive_scored(cls, values: dict) -> dict:
+        if isinstance(values, dict) and "scored" not in values:
+            values["scored"] = values.get("truth_level") is not None
+        return values
 
 
 class ScoreBreakdown(BaseModel):
@@ -97,7 +99,7 @@ def score_batch(per_assignment: list[AssignmentResult]) -> ScoreBreakdown:
             ordering_bonus=0.0,
             composite=None,
         )
-    base = sum(a.reward for a in scored if a.reward is not None) / len(scored)
+    base = sum(a.reward for a in scored) / len(scored)
     bonus = _ordering_bonus(per_assignment)
     composite = _clamp01(base + bonus)
     return ScoreBreakdown(
